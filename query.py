@@ -3,11 +3,24 @@ import json
 import numpy as np
 import argparse
 import requests
-from pdf_utils import extract_text_from_pdf_page
-from pypdf import PdfReader
+from parsers.text_utils import (
+    extract_text_from_txt,
+    extract_text_from_docx,
+    extract_text_from_rtf,
+    extract_text_from_doc
+)
+from parsers.pdf_utils import extract_text_from_pdf_page
+from parsers.ebook_utils import extract_text_from_epub
+from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 import os
 
+# Load environment variables
+load_dotenv(override=True)
+directory = os.getenv('FILE_DIRECTORY')
+print('DIRECTORY', directory)
+if not os.getenv('INDEX_DIRECTORY'):
+    raise ValueError("INDEX_DIRECTORY environment variable not set")
 
 def search_index(query, top_k=5):
     """
@@ -16,13 +29,13 @@ def search_index(query, top_k=5):
     """
     # Load the FAISS index
     try:
-        vector_index = faiss.read_index('vectorIndex')
+        vector_index = faiss.read_index(os.path.join(os.getenv('INDEX_DIRECTORY'), 'vectorIndex'))
     except Exception as e:
         raise RuntimeError(f"Failed to load vector index: {str(e)}")
 
     # Load the clusters metadata
     try:
-        with open('directory_clusters.json', 'r', encoding='utf-8') as f:
+        with open(os.path.join(os.getenv('INDEX_DIRECTORY'), 'clusters.json'), 'r', encoding='utf-8') as f:
             clusters_data = json.load(f)
     except Exception as e:
         raise RuntimeError(f"Failed to load clusters data: {str(e)}")
@@ -58,23 +71,57 @@ def search_index(query, top_k=5):
     results.sort(key=lambda x: x['distance'])
     return results[:top_k]
 
-def print_context(page, sentence):
+def extract_page_from_file(filepath, indices):
     """
-    Print context around a sentence if found in page array, otherwise print last line.
-    Args:
-        page (list): Array of strings containing page text
-        sentence (str): Target sentence to find
+    Extract text from a specific page/section of a file based on its format.
     """
+    if isinstance(indices, int):
+        indices = [indices]
+    
+    file_extension = os.path.splitext(filepath)[1].lower()
+    
+    # Map file extensions to their extraction functions
+    extractors = {
+        '.pdf': lambda f: (PdfReader(f), extract_text_from_pdf_page),
+        '.txt': extract_text_from_txt,
+        '.docx': extract_text_from_docx,
+        '.doc': extract_text_from_doc,
+        '.rtf': extract_text_from_rtf,
+        '.epub': extract_text_from_epub
+    }
+    
     try:
-        sentence_idx = next(i for i, text in enumerate(page) if sentence in text)
-        start_idx = max(0, sentence_idx - 2)
-        end_idx = min(len(page), sentence_idx + 3)
-        context = page[start_idx:end_idx]
-        print("   Context:")
-        for line in context:
-            print(f"      {line}")
-    except StopIteration:
-        print(f"   Last line: {page[-1] if page else 'No text found'}")
+        if file_extension not in extractors:
+            raise ValueError(f"Unsupported file format: {file_extension}")
+            
+        extractor = extractors[file_extension]
+        
+        # Special handling for PDF since it has a different return format
+        if file_extension == '.pdf':
+            reader, extract_func = extractor(filepath)
+            return extract_func(reader, indices)
+        
+        # Handle all other formats that return (sentences, page_indices)
+        sentences, page_indices = extractor(filepath)
+        relevant_sentences = [s for i, s in enumerate(sentences) if page_indices[i] in indices]
+        return ' '.join(relevant_sentences)
+            
+    except Exception as e:
+        print(f"Error extracting text from {filepath}: {str(e)}")
+        return ""
+
+def print_context(file_path, indices, sentence):
+    """
+    Print the context from the file for the given indices and highlight the sentence.
+    """
+    page_text = extract_page_from_file(file_path, indices)
+    if page_text:
+        # Highlight the sentence in the context
+        highlighted_text = page_text.replace(sentence, f"\033[93m{sentence}\033[0m")
+        print(highlighted_text)
+    else:
+        print("Could not extract context from file.")
+    print()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Search indexed PDF files using a query.')
@@ -86,8 +133,7 @@ if __name__ == "__main__":
     
     try:
         results = search_index(args.query, args.top_k)
-        load_dotenv()  # Load environment variables from .env file
-        directory = os.getenv('FILE_DIRECTORY')
+
         print(f"\nTop {args.top_k} matches for query: '{args.query}'\n")
 
         for i, result in enumerate(results, 1):
@@ -97,9 +143,8 @@ if __name__ == "__main__":
             print(f"   Distance: {distance:.4f}")
             print(f"   Text: {sentence}\n")
 
-            reader = PdfReader(os.path.join(directory, file))
-            page = extract_text_from_pdf_page(reader, indices)
-            print_context(page, sentence)
+            file_path = os.path.join(directory, file)
+            print_context(file_path, indices, sentence)
             print()
     except Exception as e:
         print(f"Error: {str(e)}") 

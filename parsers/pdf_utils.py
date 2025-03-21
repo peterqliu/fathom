@@ -56,11 +56,13 @@ def extract_text_from_pdf(filepath):
                 pageSentences = pageSentences[:-1]
             
             # Add each sentence to sentences array and track page index
+            pageSentences = combine_short_sentences(pageSentences)
             for sentence in pageSentences:
                 sentences.append(sentence)
                 pageIndex.append(i)  
 
         return sentences, pageIndex
+    
     except Exception as e:
         raise Exception(f"Error reading PDF file: {str(e)}") 
     
@@ -69,5 +71,28 @@ def overThree(string):
 
 def combinePages(before, after):
     return before + " " + after
+
+def combine_short_sentences(sentences, min_length=20):
+    if not sentences:
+        return []
+    
+    result = []
+    i = 0
+    
+    while i < len(sentences):
+        current = sentences[i]
+        next_idx = i + 1
+        
+        # Keep combining with next sentences until we reach minimum length or run out of sentences
+        while len(current) < min_length and next_idx < len(sentences):
+            current += " " + sentences[next_idx]
+            next_idx += 1
+        
+        result.append(current)
+        i = next_idx if next_idx > i + 1 else i + 1
+    
+    return result
+
+
 # print(extract_text_from_pdf('mindsight.pdf'))
 # print(extract_text_from_pdf_page('mindsight.pdf', 20))
