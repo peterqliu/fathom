@@ -14,6 +14,7 @@ from parsers.ebook_utils import extract_text_from_epub
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 import os
+import sys
 
 # Load environment variables
 load_dotenv(override=True)
@@ -22,27 +23,46 @@ print('DIRECTORY', directory)
 if not os.getenv('INDEX_DIRECTORY'):
     raise ValueError("INDEX_DIRECTORY environment variable not set")
 
-def search_index(query, top_k=5):
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+def search_index(query, top_k=5, model_service=None):
     """
     Search the vector index for similar sentences to the query.
     Returns the top_k most similar sentences with their metadata.
+    
+    Args:
+        query: Query string or embedding
+        top_k: Number of results to return
+        model_service: Optional ModelService instance. If None, uses localhost HTTP endpoint
     """
     # Load the FAISS index
     try:
-        vector_index = faiss.read_index(os.path.join(os.getenv('INDEX_DIRECTORY'), 'vectorIndex'))
+        vector_index = faiss.read_index(get_resource_path('index/vectorIndex'))
     except Exception as e:
         raise RuntimeError(f"Failed to load vector index: {str(e)}")
 
     # Load the clusters metadata
     try:
-        with open(os.path.join(os.getenv('INDEX_DIRECTORY'), 'clusters.json'), 'r', encoding='utf-8') as f:
+        with open(get_resource_path('index/clusters.json'), 'r', encoding='utf-8') as f:
             clusters_data = json.load(f)
     except Exception as e:
         raise RuntimeError(f"Failed to load clusters data: {str(e)}")
 
-    # Get query embedding from local server
-    response = requests.post('http://localhost:5000/encode', json={'query': query})
-    query_embedding = np.array(response.json()['embedding'])
+    # Get query embedding either from model service or local server
+    if model_service is not None:
+        query_embedding = model_service.encode(query)
+    else:
+        # Fallback to HTTP endpoint for CLI usage
+        response = requests.post('http://localhost:5000/encode', json={'query': query})
+        query_embedding = np.array(response.json()['embedding'])
     
     # Search the index
     distances, indices = vector_index.search(query_embedding.astype(np.float32), top_k)
