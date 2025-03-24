@@ -7,7 +7,6 @@ from parsers.ebook_utils import extract_text_from_epub, extract_text_from_mobi
 from file_utils import get_directory_size, format_size, blue
 import json
 import time
-from dotenv import load_dotenv
 import os
 from parsers.text_utils import (
     extract_text_from_txt,
@@ -15,20 +14,13 @@ from parsers.text_utils import (
     extract_text_from_rtf,
     extract_text_from_doc
 )
+import sys
+from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Load environment variables
-# load_dotenv()
-index_dir = os.getenv('INDEX_DIRECTORY')
-
-if not index_dir:
-    raise ValueError("INDEX_DIRECTORY environment variable not set")
-
-# Create directory if it doesn't exist
-os.makedirs(index_dir, exist_ok=True)
-
+# Creates a FAISS index with ID mapping for embeddings
 def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_dict, file_paths, directory_path):
     """
     Create a FAISS index with ID mapping for the embeddings.
@@ -50,6 +42,14 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
     
     # Process embeddings and create metadata
     for embeddings, file_path in zip(embeddings_list, file_paths):
+        # Convert embeddings to numpy array if needed
+        if not isinstance(embeddings, np.ndarray):
+            embeddings = np.array(embeddings)
+        
+        # Ensure embeddings are 2D
+        if len(embeddings.shape) == 1:
+            embeddings = embeddings.reshape(1, -1)
+            
         num_embeddings = len(embeddings)
         file_ids = np.arange(current_id, current_id + num_embeddings, dtype=np.int64)
         ids_list.append(file_ids)
@@ -67,22 +67,54 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
         current_id += num_embeddings
     
     # Combine all embeddings and IDs
-    all_embeddings = np.vstack(embeddings_list)
+    all_embeddings = np.vstack([np.array(e) for e in embeddings_list])
     all_ids = np.concatenate(ids_list)
     
     # Create FAISS index with ID mapping
     dimension = all_embeddings.shape[1]
     base_index = faiss.IndexFlatL2(dimension)
     vector_index = faiss.IndexIDMap(base_index)
-    vector_index.add_with_ids(all_embeddings, all_ids)
+    vector_index.add_with_ids(all_embeddings.astype(np.float32), all_ids)
     
     return vector_index, all_clusters
 
-def index_directory(directory_path, proportion=0.05):
+# Gets the appropriate index directory path based on environment
+def get_index_dir():
+    """Get the appropriate index directory path"""
+    if getattr(sys, 'frozen', False):
+        # We are running in a bundle
+        app_support = os.path.expanduser('~/Library/Application Support/Fathom')
+        index_dir = os.path.join(app_support, 'index')
+    else:
+        # We are running in development
+        index_dir = os.path.abspath('index')
+    
+    # Create directory if it doesn't exist
+    os.makedirs(index_dir, exist_ok=True)
+    return index_dir
+
+# Recursively indexes all supported files in a directory
+def index_directory(directory_path, proportion=0.05, model_service=None):
     """
     Recursively index all supported files (PDF, MOBI, EPUB) in a directory and its subdirectories.
     Creates a combined FAISS index of all cluster centers.
+    
+    Args:
+        directory_path: Path to directory to index
+        proportion: Proportion of sentences to use for clustering (default: 0.05)
+        model_service: Optional ModelService instance for embeddings
     """
+    print(f"Using index directory: {INDEX_DIR}")  # Debug print
+    print(f"Indexing directory: {directory_path}")  # Debug print
+    
+    if not os.path.exists(directory_path):
+        print(f"Directory does not exist: {directory_path}")
+        return
+    
+    if not os.path.isdir(directory_path):
+        print(f"Path is not a directory: {directory_path}")
+        return
+    
     # Collect all supported files recursively
     supported_files = []
     for root, _, files in os.walk(directory_path):
@@ -91,10 +123,13 @@ def index_directory(directory_path, proportion=0.05):
                 # Use os.path.join and then os.path.normpath to handle spaces correctly
                 file_path = os.path.normpath(os.path.join(root, file))
                 supported_files.append(file_path)
+                print(f"Found supported file: {file_path}")
     
     if not supported_files:
         print("No supported files found in the directory.")
         return
+
+    print(f"Found {len(supported_files)} supported files")
 
     # Initialize dictionaries to store results
     sentences_dict = {}
@@ -130,6 +165,11 @@ def index_directory(directory_path, proportion=0.05):
                 else:
                     print(f"Unsupported file format: {file_extension}")
                     continue
+                    
+                if not sentences:
+                    print(f"No text extracted from {supported_file}")
+                    continue
+                    
             except Exception as e:
                 print(f"Error processing {supported_file}: {str(e)}")
                 print(f"Error type: {type(e).__name__}")  # Debug line
@@ -141,39 +181,52 @@ def index_directory(directory_path, proportion=0.05):
             file_paths.append(supported_file)
             
             # Get clusters for this document
-            cluster_info = summarize_text(sentences, pageIndex, supported_file, method='kmeans', proportion=proportion)
-            embeddings_list.append(cluster_info['embeddings'])
+            print(f"Generating embeddings for {len(sentences)} sentences...")
+            cluster_info = summarize_text(sentences, pageIndex, supported_file, method='kmeans', proportion=proportion, model_service=model_service)
+            if cluster_info and 'embeddings' in cluster_info:
+                embeddings_list.append(cluster_info['embeddings'])
+                print(f"Successfully generated embeddings for {supported_file}")
+            else:
+                print(f"No valid embeddings generated for {supported_file}")
+                continue
             
         except Exception as e:
             print(f"Error processing {supported_file}: {str(e)}")
             continue
 
     if embeddings_list:
-        # Create FAISS index with ID mapping
-        vector_index, all_clusters = create_faiss_index_with_ids(
-            embeddings_list, 
-            sentences_dict,
-            page_indices_dict,
-            file_paths,
-            directory_path
-        )
-        
-        # Save the index and clusters to the specified directory
-        faiss.write_index(vector_index, os.path.join(index_dir, 'vectorIndex'))
-        with open(os.path.join(index_dir, 'clusters.json'), 'w') as f:
-            json.dump(all_clusters, f)
-        
-        print(f"\nProcessed {len(supported_files)} supported files")
-        total_time = time.time() - start_time
-        print("--------------------------------")
-        print(f"Total indexing time: {total_time:.2f} seconds")
-        print("--------------------------------")
-        
-        # Calculate and log size metrics in one line
-        dir_size = get_directory_size(directory_path)
-        index_size = os.path.getsize(os.path.join(index_dir, 'vectorIndex'))
-        print(blue(f"Sizes: Directory={format_size(dir_size)}, Index={format_size(index_size)} ({(index_size/dir_size)*100:.2f}% of original)"))
-        print("--------------------------------")
+        try:
+            print("Creating FAISS index...")
+            # Create FAISS index with ID mapping
+            vector_index, all_clusters = create_faiss_index_with_ids(
+                embeddings_list, 
+                sentences_dict,
+                page_indices_dict,
+                file_paths,
+                directory_path
+            )
+            
+            print(f"Saving index to {VECTOR_INDEX_FILE}")
+            faiss.write_index(vector_index, VECTOR_INDEX_FILE)
+            
+            print(f"Saving clusters to {CLUSTERS_FILE}")
+            with open(CLUSTERS_FILE, 'w') as f:
+                json.dump(all_clusters, f, indent=2)
+            
+            print(f"\nProcessed {len(supported_files)} supported files")
+            total_time = time.time() - start_time
+            print("--------------------------------")
+            print(f"Total indexing time: {total_time:.2f} seconds")
+            print("--------------------------------")
+            
+            # Calculate and log size metrics in one line
+            dir_size = get_directory_size(directory_path)
+            index_size = os.path.getsize(VECTOR_INDEX_FILE)
+            print(blue(f"Sizes: Directory={format_size(dir_size)}, Index={format_size(index_size)} ({(index_size/dir_size)*100:.2f}% of original)"))
+            print("--------------------------------")
+        except Exception as e:
+            print(f"Error saving index files: {str(e)}")
+            raise
     else:
         print("No valid embeddings were generated.")
 
@@ -184,6 +237,10 @@ def remove_file_embeddings(filename):
     Args:
         filename (str): Name of the file to remove (will be matched against relative paths)
     """
+    # Get index directory directly (don't use environment variable)
+    index_dir = get_index_dir()
+    print(f"Using index directory: {index_dir}")  # Debug print
+        
     try:
         # Load existing metadata
         with open(os.path.join(index_dir, 'clusters.json'), 'r', encoding='utf-8') as f:
@@ -231,12 +288,13 @@ if __name__ == "__main__":
                         help='Remove embeddings for a specific file (provide filename or path)')
     
     args = parser.parse_args()
-    load_dotenv(override=True)  # Force reload of environment variables
     
     if args.remove:
         print(f"Removing embeddings for: {args.remove}")
         remove_file_embeddings(args.remove)
     else:
         directory = os.getenv('FILE_DIRECTORY')
+        if not directory:
+            raise ValueError("FILE_DIRECTORY environment variable not set")
         print("Indexing directory: ", directory)
         index_directory(directory, args.proportion) 

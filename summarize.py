@@ -4,7 +4,6 @@ import numpy as np
 from sklearn.cluster import KMeans
 import networkx as nx
 from sklearn.metrics.pairwise import paired_distances
-from model_server import model
 import json
 import nltk
 import argparse
@@ -16,34 +15,44 @@ try:
 except LookupError:
     nltk.download('punkt')
 
-def get_sentence_embeddings(sentences, indices):
+def get_sentence_embeddings(sentences, indices, model_service=None):
     """
     Convert sentences into embeddings.
     
     Args:
         sentences (list): List of sentences to embed
+        indices (list): List of indices for the sentences
+        model_service: Optional ModelService instance for embeddings
     """
     if not sentences or not isinstance(sentences, list):
         raise ValueError(f"Invalid sentences input. Got type: {type(sentences)}")
     
     print(f"Found {len(sentences)} sentences")
     
-    pages = []
-    current_pos = 0
-
-    for s in sentences:
-        pages.append(current_pos)
-        current_pos += len(s)
-    
     try:
-        embeddings = model.encode(sentences, convert_to_numpy=True, batch_size=32)
-        if embeddings.size == 0:
+        if model_service is None:
+            print("Model service is None!")
+            raise ValueError("No model service provided for embeddings")
+            
+        print(f"Model service state: {model_service.state if hasattr(model_service, 'state') else 'unknown'}")
+        print("Attempting to encode sentences...")
+        embeddings = model_service.encode(sentences)
+        print(f"Embeddings shape: {embeddings.shape if hasattr(embeddings, 'shape') else 'unknown'}")
+        
+        if embeddings is None or (hasattr(embeddings, 'size') and embeddings.size == 0):
+            print("No embeddings were generated!")
             raise ValueError("No embeddings were generated")
+            
+        # Ensure embeddings are 2D numpy array
+        if len(embeddings.shape) == 1:
+            print("Reshaping 1D embeddings to 2D")
+            embeddings = embeddings.reshape(1, -1)
             
         return embeddings
         
     except Exception as e:
         print(f"Error generating embeddings: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
         raise
 
 def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, proportion=0.1):
@@ -51,10 +60,6 @@ def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, pro
     num_clusters = max(1, round(len(sentences) * proportion))
     kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init=10)
     kmeans.fit(embeddings)
-
-    dimension = embeddings.shape[1]
-    vector_index = faiss.IndexFlatL2(dimension)
-    vector_index.add(embeddings)
 
     cluster_centers = kmeans.cluster_centers_
     cluster_info = {
@@ -74,13 +79,13 @@ def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, pro
     
     return cluster_info
 
-def summarize_text(sentences, pageIndex, filepath, method='kmeans', proportion=0.05):
+def summarize_text(sentences, pageIndex, filepath, method='kmeans', proportion=0.05, model_service=None):
     """Summarizes text using dynamic K-Means clustering."""
     start_pdf = time.time()
     
     # Get sentence embeddings
     start_embed = time.time()
-    embeddings = get_sentence_embeddings(sentences, pageIndex)
+    embeddings = get_sentence_embeddings(sentences, pageIndex, model_service)
     embed_time = time.time() - start_embed
     sent_per_second = len(sentences) / embed_time
 

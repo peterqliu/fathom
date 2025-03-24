@@ -15,6 +15,7 @@ from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 import os
 import sys
+from constants import APP_SUPPORT_PATH, INDEX_DIR
 
 # Load environment variables
 load_dotenv(override=True)
@@ -22,16 +23,6 @@ directory = os.getenv('FILE_DIRECTORY')
 print('DIRECTORY', directory)
 if not os.getenv('INDEX_DIRECTORY'):
     raise ValueError("INDEX_DIRECTORY environment variable not set")
-
-def get_resource_path(relative_path):
-    """Get absolute path to resource, works for dev and for PyInstaller"""
-    try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
 
 def search_index(query, top_k=5, model_service=None):
     """
@@ -45,13 +36,13 @@ def search_index(query, top_k=5, model_service=None):
     """
     # Load the FAISS index
     try:
-        vector_index = faiss.read_index(get_resource_path('index/vectorIndex'))
+        vector_index = faiss.read_index(os.path.join(INDEX_DIR, 'vectorIndex'))
     except Exception as e:
         raise RuntimeError(f"Failed to load vector index: {str(e)}")
 
     # Load the clusters metadata
     try:
-        with open(get_resource_path('index/clusters.json'), 'r', encoding='utf-8') as f:
+        with open(os.path.join(INDEX_DIR, 'clusters.json'), 'r', encoding='utf-8') as f:
             clusters_data = json.load(f)
     except Exception as e:
         raise RuntimeError(f"Failed to load clusters data: {str(e)}")

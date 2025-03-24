@@ -40,14 +40,36 @@ class ModelService:
             logger.error("Failed to initialize model: %s", str(e))
             raise
     
-    def encode(self, query: str) -> np.ndarray:
-        """Encode a query string to an embedding vector"""
+    def encode(self, query) -> np.ndarray:
+        """
+        Encode a query string or list of strings to embedding vector(s)
+        
+        Args:
+            query: A string or list of strings to encode
+            
+        Returns:
+            np.ndarray: The embedding vector(s)
+        """
         if not self.ready.is_set():
             raise RuntimeError("Model not yet initialized")
         
         try:
-            embedding = self.model.encode([query], convert_to_numpy=True)
-            return embedding[0]  # Return the first (and only) embedding
+            # Convert single string to list
+            if isinstance(query, str):
+                query = [query]
+            
+            # Ensure query is a list
+            if not isinstance(query, list):
+                raise ValueError(f"Query must be a string or list of strings, got {type(query)}")
+            
+            # Encode all strings
+            embeddings = self.model.encode(query, convert_to_numpy=True)
+            
+            # If single string was provided, return single embedding
+            if len(query) == 1:
+                return embeddings[0]
+            
+            return embeddings
             
         except Exception as e:
             logger.error("Encoding error: %s", str(e))
