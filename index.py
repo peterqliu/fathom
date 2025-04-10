@@ -149,19 +149,19 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
                 
                 if file_extension == '.pdf':
                     sentences, pageIndex = extract_text_from_pdf(supported_file)
-                elif file_extension == '.epub':
-                    sentences, pageIndex = extract_text_from_epub(supported_file)
-                elif file_extension == '.txt':
-                    sentences, pageIndex = extract_text_from_txt(supported_file)
-                elif file_extension == '.docx':
-                    sentences, pageIndex = extract_text_from_docx(supported_file)
-                elif file_extension == '.rtf':
-                    sentences, pageIndex = extract_text_from_rtf(supported_file)
-                elif file_extension == '.doc':
-                    sentences, pageIndex = extract_text_from_doc(supported_file)
-                elif file_extension == '.mobi':
-                    print(f"Warning: MOBI files need conversion to EPUB first. Skipping {supported_file}")
-                    continue
+                # elif file_extension == '.epub':
+                #     sentences, pageIndex = extract_text_from_epub(supported_file)
+                # elif file_extension == '.txt':
+                #     sentences, pageIndex = extract_text_from_txt(supported_file)
+                # elif file_extension == '.docx':
+                #     sentences, pageIndex = extract_text_from_docx(supported_file)
+                # elif file_extension == '.rtf':
+                #     sentences, pageIndex = extract_text_from_rtf(supported_file)
+                # elif file_extension == '.doc':
+                #     sentences, pageIndex = extract_text_from_doc(supported_file)
+                # elif file_extension == '.mobi':
+                #     print(f"Warning: MOBI files need conversion to EPUB first. Skipping {supported_file}")
+                #     continue
                 else:
                     print(f"Unsupported file format: {file_extension}")
                     continue

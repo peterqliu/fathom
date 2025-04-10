@@ -1,0 +1,11 @@
+numpy>=1.21.0
+scikit-learn>=1.0.0
+networkx>=2.6.0
+nltk>=3.6.0
+faiss-cpu>=1.7.0
+sentence-transformers>=2.2.0
+python-docx>=0.8.11
+PyPDF2>=2.0.0
+ebooklib>=0.17.1
+mobi>=0.3.0
+pyth==0.6.0 
