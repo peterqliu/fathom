@@ -3,19 +3,19 @@ import faiss
 import numpy as np
 from summarize import summarize_text
 from parsers.pdf_utils import extract_text_from_pdf
-from parsers.ebook_utils import extract_text_from_epub, extract_text_from_mobi
+# from parsers.ebook_utils import extract_text_from_epub, extract_text_from_mobi
 from file_utils import get_directory_size, format_size, blue
 import json
 import time
 import os
-from parsers.text_utils import (
-    extract_text_from_txt,
-    extract_text_from_docx,
-    extract_text_from_rtf,
-    extract_text_from_doc
-)
+# from parsers.text_utils import (
+#     extract_text_from_txt,
+#     extract_text_from_docx,
+#     extract_text_from_rtf,
+#     extract_text_from_doc
+# )
 import sys
-from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE
+from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -280,6 +280,28 @@ def remove_file_embeddings(filename):
     except Exception as e:
         print(f"Error removing embeddings: {str(e)}")
 
+def get_target_directory():
+    """
+    Read and return the target directory from the config file.
+    
+    Returns:
+        str: The target directory path
+        
+    Raises:
+        ValueError: If config file is missing, invalid, or missing targetDirectory
+    """
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            directory = config.get('targetDirectory')
+            if not directory:
+                raise ValueError("targetDirectory not found in config file")
+            return os.path.expanduser(directory)  # Expand ~ to home directory
+    except FileNotFoundError:
+        raise ValueError(f"Config file not found at {CONFIG_FILE}")
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Index all supported files in a directory using K-means clustering.')
     parser.add_argument('--proportion', type=float, default=0.05,
@@ -293,8 +315,6 @@ if __name__ == "__main__":
         print(f"Removing embeddings for: {args.remove}")
         remove_file_embeddings(args.remove)
     else:
-        directory = os.getenv('FILE_DIRECTORY')
-        if not directory:
-            raise ValueError("FILE_DIRECTORY environment variable not set")
+        directory = get_target_directory()
         print("Indexing directory: ", directory)
         index_directory(directory, args.proportion) 
