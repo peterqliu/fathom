@@ -303,18 +303,7 @@ def get_target_directory():
         raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Index all supported files in a directory using K-means clustering.')
-    parser.add_argument('--proportion', type=float, default=0.05,
-                        help='Proportion of sentences to use for clustering (default: 0.05)')
-    parser.add_argument('--remove', type=str,
-                        help='Remove embeddings for a specific file (provide filename or path)')
-    
-    args = parser.parse_args()
-    
-    if args.remove:
-        print(f"Removing embeddings for: {args.remove}")
-        remove_file_embeddings(args.remove)
-    else:
+
         directory = get_target_directory()
         print("Indexing directory: ", directory)
-        index_directory(directory, args.proportion) 
+        index_directory(directory, 0.05) 

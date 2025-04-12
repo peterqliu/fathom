@@ -64,12 +64,13 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
         print(f"Error type: {type(e).__name__}")
         raise
 
-def process_streaming_pdf(filepath):
+def process_streaming_pdf(filepath, batch_size=64):
     """
     Process PDF file in streaming fashion, extracting and embedding sentences as they come.
     
     Args:
         filepath (str): Path to the PDF file
+        batch_size (int): Number of sentences to batch together for embedding
         
     Returns:
         tuple: (sentences, indices, embeddings) - lists of processed data
@@ -77,28 +78,55 @@ def process_streaming_pdf(filepath):
     sentences = []
     indices = []
     embeddings = []
+    current_batch = []
+    current_batch_indices = []
     
     start_time = time.time()
     sentence_count = 0
     
     print("Starting PDF processing...")
     for sentence, page_index in stream_text_from_pdf(filepath):
-        # Get embedding for the current sentence
-        response = requests.post('http://localhost:5000/encode', json={'query': sentence})
+        current_batch.append(sentence)
+        current_batch_indices.append(page_index)
+        
+        if len(current_batch) >= batch_size:
+            # Process the batch
+            response = requests.post('http://localhost:5000/encode_batch', 
+                                  json={'queries': current_batch})
+            if response.status_code != 200:
+                raise ValueError(f"Failed to get embeddings: {response.text}")
+            
+            batch_embeddings = np.array(response.json()['embeddings'])
+            
+            # Store results
+            sentences.extend(current_batch)
+            indices.extend(current_batch_indices)
+            embeddings.extend(batch_embeddings)
+            
+            # Clear the batch
+            current_batch = []
+            current_batch_indices = []
+            
+            sentence_count += batch_size
+            if sentence_count % 100 == 0:
+                elapsed = time.time() - start_time
+                rate = sentence_count / elapsed
+                print(f"Processed {sentence_count} sentences ({rate:.2f} sent/s)")
+    
+    # Process any remaining sentences in the last batch
+    if current_batch:
+        response = requests.post('http://localhost:5000/encode_batch', 
+                              json={'queries': current_batch})
         if response.status_code != 200:
-            raise ValueError(f"Failed to get embedding: {response.text}")
-        embedding = np.array(response.json()['embedding'])
+            raise ValueError(f"Failed to get embeddings: {response.text}")
         
-        # Store results
-        sentences.append(sentence)
-        indices.append(page_index)
-        embeddings.append(embedding)
+        batch_embeddings = np.array(response.json()['embeddings'])
         
-        sentence_count += 1
-        if sentence_count % 100 == 0:
-            elapsed = time.time() - start_time
-            rate = sentence_count / elapsed
-            print(f"Processed {sentence_count} sentences ({rate:.2f} sent/s)")
+        sentences.extend(current_batch)
+        indices.extend(current_batch_indices)
+        embeddings.extend(batch_embeddings)
+        
+        sentence_count += len(current_batch)
     
     embeddings = np.array(embeddings)
     elapsed = time.time() - start_time
