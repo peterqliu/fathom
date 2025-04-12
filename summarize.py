@@ -160,7 +160,19 @@ def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, pro
     
     return cluster_info
 
-def summarize_text(sentences, pageIndex, embeddings, filepath, method='kmeans', proportion=0.05):
+def summarize_text(filepath, method='kmeans', proportion=0.05):
+
+    start_total = time.time()
+
+    # Process PDF in streaming fashion
+    sentences, pageIndex, embeddings = process_streaming_pdf(filepath)
+    input_sentence_count = len(sentences)
+
+    print("--------------------------------")
+    print(f"PDF extraction and embedding complete")
+    print(f"Processed {input_sentence_count} sentences")
+    print("--------------------------------")
+
     """Summarizes text using dynamic K-Means clustering."""
     start_summary = time.time()
     
@@ -177,25 +189,6 @@ def summarize_text(sentences, pageIndex, embeddings, filepath, method='kmeans', 
     if not isinstance(cluster_info, dict):
         raise ValueError("cluster_info must be a dictionary")
         
-    return cluster_info
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Summarize a PDF file using K-means clustering.')
-    start_total = time.time()
-    pdf_file = '/Users/peterliu/Documents/Repos/fathom/test/fan.pdf'
-    
-    # Process PDF in streaming fashion
-    sentences, pageIndex, embeddings = process_streaming_pdf(pdf_file)
-    
-    input_sentence_count = len(sentences)
-    print("--------------------------------")
-    print(f"PDF extraction and embedding complete")
-    print(f"Processed {input_sentence_count} sentences")
-    print("--------------------------------")
-
-    # Run clustering on the accumulated results
-    cluster_info = summarize_text(sentences, pageIndex, embeddings, pdf_file, method='kmeans', proportion=0.05)
-
     output_sentence_count = len(cluster_info['sentences'])
     compression_ratio = output_sentence_count / input_sentence_count
 
@@ -207,6 +200,16 @@ if __name__ == "__main__":
     print("--------------------------------")
     print(f"Total: {total_time:.2f}s ({len(sentences)/1000:.0f}k sentences ({sentences_per_second/1000:.2f}k sent/s)")
     print("--------------------------------")
+
+    return cluster_info
+
+if __name__ == "__main__":
+
+    pdf_file = '/Users/peterliu/Documents/Repos/fathom/test/fan.pdf'
+
+    # Run clustering on the accumulated results
+    cluster_info = summarize_text(pdf_file, method='kmeans', proportion=0.05)
+
 
     # Save to clusters file from constants
     with open(CLUSTERS_FILE, 'w', encoding='utf-8') as f:

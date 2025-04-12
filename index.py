@@ -2,7 +2,7 @@ import argparse
 import faiss
 import numpy as np
 from summarize import summarize_text
-from parsers.pdf_utils import extract_text_from_pdf
+# from parsers.pdf_utils import process_streaming_pdf
 # from parsers.ebook_utils import extract_text_from_epub, extract_text_from_mobi
 from file_utils import get_directory_size, format_size, blue
 import json
@@ -123,7 +123,6 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
                 # Use os.path.join and then os.path.normpath to handle spaces correctly
                 file_path = os.path.normpath(os.path.join(root, file))
                 supported_files.append(file_path)
-                print(f"Found supported file: {file_path}")
     
     if not supported_files:
         print("No supported files found in the directory.")
@@ -148,7 +147,7 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
                 print(f"Processing file: {supported_file} with extension: {file_extension}")  # Debug line
                 
                 if file_extension == '.pdf':
-                    sentences, pageIndex = extract_text_from_pdf(supported_file)
+                    cluster_info = summarize_text(supported_file)
                 # elif file_extension == '.epub':
                 #     sentences, pageIndex = extract_text_from_epub(supported_file)
                 # elif file_extension == '.txt':
@@ -166,7 +165,7 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
                     print(f"Unsupported file format: {file_extension}")
                     continue
                     
-                if not sentences:
+                if not cluster_info:
                     print(f"No text extracted from {supported_file}")
                     continue
                     
@@ -176,13 +175,11 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
                 continue
             
             # Store results with the full file path as the key
-            sentences_dict[supported_file] = sentences
-            page_indices_dict[supported_file] = pageIndex
+            sentences_dict[supported_file] = cluster_info.get('sentences', [])
+            page_indices_dict[supported_file] = cluster_info.get('page_indices', [])
             file_paths.append(supported_file)
             
             # Get clusters for this document
-            print(f"Generating embeddings for {len(sentences)} sentences...")
-            cluster_info = summarize_text(sentences, pageIndex, supported_file, method='kmeans', proportion=proportion, model_service=model_service)
             if cluster_info and 'embeddings' in cluster_info:
                 embeddings_list.append(cluster_info['embeddings'])
                 print(f"Successfully generated embeddings for {supported_file}")
