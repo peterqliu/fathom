@@ -3,26 +3,22 @@ import json
 import numpy as np
 import argparse
 import requests
-from parsers.text_utils import (
-    extract_text_from_txt,
-    extract_text_from_docx,
-    extract_text_from_rtf,
-    extract_text_from_doc
-)
+# from parsers.text_utils import (
+#     extract_text_from_txt,
+#     extract_text_from_docx,
+#     extract_text_from_rtf,
+#     extract_text_from_doc
+# )
 from parsers.pdf_utils import extract_text_from_pdf_page
-from parsers.ebook_utils import extract_text_from_epub
+# from parsers.ebook_utils import extract_text_from_epub
 from PyPDF2 import PdfReader
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 import os
 import sys
-from constants import APP_SUPPORT_PATH, INDEX_DIR
+from constants import APP_SUPPORT_PATH, INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
+from index import get_target_directory
 
-# Load environment variables
-load_dotenv(override=True)
-directory = os.getenv('FILE_DIRECTORY')
-print('DIRECTORY', directory)
-if not os.getenv('INDEX_DIRECTORY'):
-    raise ValueError("INDEX_DIRECTORY environment variable not set")
+
 
 def search_index(query, top_k=5, model_service=None):
     """
@@ -34,49 +30,82 @@ def search_index(query, top_k=5, model_service=None):
         top_k: Number of results to return
         model_service: Optional ModelService instance. If None, uses localhost HTTP endpoint
     """
+    print(f"Searching index for query: {query}")
     # Load the FAISS index
+    vector_index_path = os.path.join(INDEX_DIR, 'vectorIndex')
+    clusters_path = os.path.join(INDEX_DIR, 'clusters.json')
+    
+    print(f"Looking for vector index at: {vector_index_path}")
+    print(f"Looking for clusters at: {clusters_path}")
+    print(f"INDEX_DIR exists: {os.path.exists(INDEX_DIR)}")
+    print(f"Vector index exists: {os.path.exists(vector_index_path)}")
+    print(f"Clusters file exists: {os.path.exists(clusters_path)}")
+    
     try:
-        vector_index = faiss.read_index(os.path.join(INDEX_DIR, 'vectorIndex'))
+        vector_index = faiss.read_index(vector_index_path)
     except Exception as e:
         raise RuntimeError(f"Failed to load vector index: {str(e)}")
 
     # Load the clusters metadata
     try:
-        with open(os.path.join(INDEX_DIR, 'clusters.json'), 'r', encoding='utf-8') as f:
+        with open(clusters_path, 'r', encoding='utf-8') as f:
             clusters_data = json.load(f)
     except Exception as e:
         raise RuntimeError(f"Failed to load clusters data: {str(e)}")
 
     # Get query embedding either from model service or local server
-    if model_service is not None:
-        query_embedding = model_service.encode(query)
-    else:
-        # Fallback to HTTP endpoint for CLI usage
-        response = requests.post('http://localhost:5000/encode', json={'query': query})
-        query_embedding = np.array(response.json()['embedding'])
+    try:
+        if model_service is not None:
+            query_embedding = model_service.encode(query)
+        else:
+            # Fallback to HTTP endpoint for CLI usage
+            response = requests.post('http://localhost:5000/encode', json={'query': 'Represent this sentence for retrieval: '+query})
+            query_embedding = np.array(response.json()['embedding'])
+    except Exception as e:
+        raise RuntimeError(f"Failed to get query embedding: {str(e)}")
     
     # Search the index
-    distances, indices = vector_index.search(query_embedding.astype(np.float32), top_k)
+    try:
+        distances, indices = vector_index.search(query_embedding.astype(np.float32), top_k)
+        print(f"Search returned {len(indices[0])} results")
+    except Exception as e:
+        raise RuntimeError(f"Failed to search index: {str(e)}")
     
     # Collect results
     results = []
     current_idx = 0
     
-    for file_data in clusters_data['files']:
-        num_clusters = len(file_data['sentences'])
-        file_indices = indices[0][(indices[0] >= current_idx) & (indices[0] < current_idx + num_clusters)]
-        
-        if len(file_indices) > 0:
-            for idx in file_indices:
-                relative_idx = idx - current_idx
-                results.append({
-                    'file': file_data['path'],
-                    'sentence': file_data['sentences'][relative_idx],
-                    'indices': file_data['indices'][relative_idx],
-                    'distance': float(distances[0][np.where(indices[0] == idx)[0][0]])
-                })
-        
-        current_idx += num_clusters
+    try:
+        for file_data in clusters_data['files']:
+            num_clusters = len(file_data['sentences'])
+            print(f"Processing file: {file_data['path']} with {num_clusters} sentences")
+            
+            # Find indices that fall within this file's range
+            file_indices = indices[0][(indices[0] >= current_idx) & (indices[0] < current_idx + num_clusters)]
+            print(f"Found {len(file_indices)} matches in this file")
+            
+            if len(file_indices) > 0:
+                for idx in file_indices:
+                    relative_idx = idx - current_idx
+                    print(f"Processing index {idx} (relative: {relative_idx})")
+                    if relative_idx < 0 or relative_idx >= num_clusters:
+                        print(f"Warning: Skipping invalid relative index {relative_idx} for file {file_data['path']}")
+                        continue
+                        
+                    results.append({
+                        'file': file_data['path'],
+                        'sentence': file_data['sentences'][relative_idx],
+                        'indices': file_data['indices'][relative_idx],
+                        'distance': float(distances[0][np.where(indices[0] == idx)[0][0]])
+                    })
+            
+            current_idx += num_clusters
+    except Exception as e:
+        print(f"Error processing results: {str(e)}")
+        print(f"Current index: {current_idx}")
+        print(f"File data: {file_data}")
+        print(f"Indices: {indices}")
+        raise
     
     # Sort results by distance
     results.sort(key=lambda x: x['distance'])
@@ -94,11 +123,11 @@ def extract_page_from_file(filepath, indices):
     # Map file extensions to their extraction functions
     extractors = {
         '.pdf': lambda f: (PdfReader(f), extract_text_from_pdf_page),
-        '.txt': extract_text_from_txt,
-        '.docx': extract_text_from_docx,
-        '.doc': extract_text_from_doc,
-        '.rtf': extract_text_from_rtf,
-        '.epub': extract_text_from_epub
+        # '.txt': extract_text_from_txt,
+        # '.docx': extract_text_from_docx,
+        # '.doc': extract_text_from_doc,
+        # '.rtf': extract_text_from_rtf,
+        # '.epub': extract_text_from_epub
     }
     
     try:
@@ -110,7 +139,15 @@ def extract_page_from_file(filepath, indices):
         # Special handling for PDF since it has a different return format
         if file_extension == '.pdf':
             reader, extract_func = extractor(filepath)
-            return extract_func(reader, indices)
+            # For PDFs, we need to handle each page index separately
+            all_text = []
+            for page_idx in indices:
+                try:
+                    page_text = extract_func(reader, page_idx)
+                    all_text.extend(page_text)
+                except Exception as e:
+                    print(f"Error extracting page {page_idx}: {str(e)}")
+            return ' '.join(all_text)
         
         # Handle all other formats that return (sentences, page_indices)
         sentences, page_indices = extractor(filepath)
@@ -141,7 +178,7 @@ if __name__ == "__main__":
                         help='Number of results to return (default: 5)')
     
     args = parser.parse_args()
-    
+    print(INDEX_DIR)
     try:
         results = search_index(args.query, args.top_k)
 
@@ -154,7 +191,7 @@ if __name__ == "__main__":
             print(f"   Distance: {distance:.4f}")
             print(f"   Text: {sentence}\n")
 
-            file_path = os.path.join(directory, file)
+            file_path = os.path.join(get_target_directory(), file)
             print_context(file_path, indices, sentence)
             print()
     except Exception as e:

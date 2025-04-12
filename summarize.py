@@ -42,9 +42,7 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
             if response.status_code != 200:
                 raise ValueError(f"Failed to get embedding: {response.text}")
             embedding = np.array(response.json()['embedding'])
-            # Ensure embedding is 1D before appending
-            # if len(embedding.shape) > 1:
-            #     embedding = embedding.reshape(-1)
+
             embeddings.append(embedding)
             
         embeddings = np.array(embeddings)

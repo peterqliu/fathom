@@ -56,6 +56,7 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
         
         # Store file information with ID range
         relative_path = os.path.relpath(file_path, directory_path)
+        print(page_indices_dict[file_path])
         all_clusters['files'].append({
             'path': relative_path,
             'sentences': sentences_dict[file_path],
@@ -176,7 +177,7 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
             
             # Store results with the full file path as the key
             sentences_dict[supported_file] = cluster_info.get('sentences', [])
-            page_indices_dict[supported_file] = cluster_info.get('page_indices', [])
+            page_indices_dict[supported_file] = cluster_info.get('indices', [])
             file_paths.append(supported_file)
             
             # Get clusters for this document
@@ -301,6 +302,6 @@ def get_target_directory():
 
 if __name__ == "__main__":
 
-        directory = get_target_directory()
-        print("Indexing directory: ", directory)
-        index_directory(directory, 0.05) 
+    directory = get_target_directory()
+    print("Indexing directory: ", directory)
+    index_directory(directory, 0.05) 

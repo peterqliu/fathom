@@ -61,7 +61,7 @@ def encode():
     query = data['query']
     embedding = model.encode([query], convert_to_numpy=True)
     # Ensure embedding is 1D before converting to list
-    embedding = np.squeeze(embedding)
+    # embedding = np.squeeze(embedding)
     return jsonify({'embedding': embedding.tolist()})
 
 @app.route('/encode_batch', methods=['POST'])
