@@ -10,7 +10,7 @@ from nltk.tokenize import sent_tokenize
 import argparse
 import faiss
 from parsers.pdf_utils import stream_text_from_pdf
-import requests
+from utils import get_embedding, get_embeddings_batch
 from constants import CLUSTERS_FILE
 
 # Ensure NLTK data is downloaded
@@ -38,11 +38,7 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
         # Get embeddings for each sentence individually
         embeddings = []
         for sentence in sentences:
-            response = requests.post('http://localhost:5000/encode', json={'query': sentence})
-            if response.status_code != 200:
-                raise ValueError(f"Failed to get embedding: {response.text}")
-            embedding = np.array(response.json()['embedding'])
-
+            embedding = get_embedding(sentence)
             embeddings.append(embedding)
             
         embeddings = np.array(embeddings)
@@ -89,12 +85,7 @@ def process_streaming_pdf(filepath, batch_size=64):
         
         if len(current_batch) >= batch_size:
             # Process the batch
-            response = requests.post('http://localhost:5000/encode_batch', 
-                                  json={'queries': current_batch})
-            if response.status_code != 200:
-                raise ValueError(f"Failed to get embeddings: {response.text}")
-            
-            batch_embeddings = np.array(response.json()['embeddings'])
+            batch_embeddings = get_embeddings_batch(current_batch)
             
             # Store results
             sentences.extend(current_batch)
@@ -113,12 +104,7 @@ def process_streaming_pdf(filepath, batch_size=64):
     
     # Process any remaining sentences in the last batch
     if current_batch:
-        response = requests.post('http://localhost:5000/encode_batch', 
-                              json={'queries': current_batch})
-        if response.status_code != 200:
-            raise ValueError(f"Failed to get embeddings: {response.text}")
-        
-        batch_embeddings = np.array(response.json()['embeddings'])
+        batch_embeddings = get_embeddings_batch(current_batch)
         
         sentences.extend(current_batch)
         indices.extend(current_batch_indices)

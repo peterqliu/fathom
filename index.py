@@ -16,6 +16,7 @@ import os
 # )
 import sys
 from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
+from utils import get_index_dir
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -78,21 +79,6 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
     vector_index.add_with_ids(all_embeddings.astype(np.float32), all_ids)
     
     return vector_index, all_clusters
-
-# Gets the appropriate index directory path based on environment
-def get_index_dir():
-    """Get the appropriate index directory path"""
-    if getattr(sys, 'frozen', False):
-        # We are running in a bundle
-        app_support = os.path.expanduser('~/Library/Application Support/Fathom')
-        index_dir = os.path.join(app_support, 'index')
-    else:
-        # We are running in development
-        index_dir = os.path.abspath('index')
-    
-    # Create directory if it doesn't exist
-    os.makedirs(index_dir, exist_ok=True)
-    return index_dir
 
 # Recursively indexes all supported files in a directory
 def index_directory(directory_path, proportion=0.05, model_service=None):

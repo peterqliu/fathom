@@ -17,6 +17,7 @@ import os
 import sys
 from constants import APP_SUPPORT_PATH, INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
 from index import get_target_directory
+from utils import get_embedding
 
 
 
@@ -58,9 +59,8 @@ def search_index(query, top_k=5, model_service=None):
         if model_service is not None:
             query_embedding = model_service.encode(query)
         else:
-            # Fallback to HTTP endpoint for CLI usage
-            response = requests.post('http://localhost:5000/encode', json={'query': 'Represent this sentence for retrieval: '+query})
-            query_embedding = np.array(response.json()['embedding'])
+            # Use our utility function with the retrieval prefix
+            query_embedding = get_embedding('Represent this sentence for retrieval: ' + query)
     except Exception as e:
         raise RuntimeError(f"Failed to get query embedding: {str(e)}")
     
