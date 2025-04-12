@@ -6,8 +6,12 @@ import networkx as nx
 from sklearn.metrics.pairwise import paired_distances
 import json
 import nltk
+from nltk.tokenize import sent_tokenize
 import argparse
 import faiss
+from parsers.pdf_utils import stream_text_from_pdf
+import requests
+from constants import CLUSTERS_FILE
 
 # Ensure NLTK data is downloaded
 try:
@@ -22,7 +26,7 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
     Args:
         sentences (list): List of sentences to embed
         indices (list): List of indices for the sentences
-        model_service: Optional ModelService instance for embeddings
+        model_service: Optional ModelService instance for embeddings (ignored, using HTTP endpoint)
     """
     if not sentences or not isinstance(sentences, list):
         raise ValueError(f"Invalid sentences input. Got type: {type(sentences)}")
@@ -30,23 +34,28 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
     print(f"Found {len(sentences)} sentences")
     
     try:
-        if model_service is None:
-            print("Model service is None!")
-            raise ValueError("No model service provided for embeddings")
-            
-        print(f"Model service state: {model_service.state if hasattr(model_service, 'state') else 'unknown'}")
         print("Attempting to encode sentences...")
-        embeddings = model_service.encode(sentences)
+        # Get embeddings for each sentence individually
+        embeddings = []
+        for sentence in sentences:
+            response = requests.post('http://localhost:5000/encode', json={'query': sentence})
+            if response.status_code != 200:
+                raise ValueError(f"Failed to get embedding: {response.text}")
+            embedding = np.array(response.json()['embedding'])
+            # Ensure embedding is 1D before appending
+            # if len(embedding.shape) > 1:
+            #     embedding = embedding.reshape(-1)
+            embeddings.append(embedding)
+            
+        embeddings = np.array(embeddings)
         print(f"Embeddings shape: {embeddings.shape if hasattr(embeddings, 'shape') else 'unknown'}")
         
         if embeddings is None or (hasattr(embeddings, 'size') and embeddings.size == 0):
             print("No embeddings were generated!")
             raise ValueError("No embeddings were generated")
             
-        # Ensure embeddings are 2D numpy array
-        if len(embeddings.shape) == 1:
-            print("Reshaping 1D embeddings to 2D")
-            embeddings = embeddings.reshape(1, -1)
+        if embeddings.shape[0] != len(sentences):
+            raise ValueError(f"Number of embeddings ({embeddings.shape[0]}) does not match number of sentences ({len(sentences)})")
             
         return embeddings
         
@@ -55,9 +64,53 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
         print(f"Error type: {type(e).__name__}")
         raise
 
+def process_streaming_pdf(filepath):
+    """
+    Process PDF file in streaming fashion, extracting and embedding sentences as they come.
+    
+    Args:
+        filepath (str): Path to the PDF file
+        
+    Returns:
+        tuple: (sentences, indices, embeddings) - lists of processed data
+    """
+    sentences = []
+    indices = []
+    embeddings = []
+    
+    start_time = time.time()
+    sentence_count = 0
+    
+    print("Starting PDF processing...")
+    for sentence, page_index in stream_text_from_pdf(filepath):
+        # Get embedding for the current sentence
+        response = requests.post('http://localhost:5000/encode', json={'query': sentence})
+        if response.status_code != 200:
+            raise ValueError(f"Failed to get embedding: {response.text}")
+        embedding = np.array(response.json()['embedding'])
+        
+        # Store results
+        sentences.append(sentence)
+        indices.append(page_index)
+        embeddings.append(embedding)
+        
+        sentence_count += 1
+        if sentence_count % 100 == 0:
+            elapsed = time.time() - start_time
+            rate = sentence_count / elapsed
+            print(f"Processed {sentence_count} sentences ({rate:.2f} sent/s)")
+    
+    embeddings = np.array(embeddings)
+    elapsed = time.time() - start_time
+    print(f"Completed processing {sentence_count} sentences in {elapsed:.2f}s ({sentence_count/elapsed:.2f} sent/s)")
+    
+    return sentences, indices, embeddings
+
 def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, proportion=0.1):
     """Dynamically selects number of clusters and finds closest sentences."""
     num_clusters = max(1, round(len(sentences) * proportion))
+    print(f"num_clusters: {num_clusters}")
+    
     kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init=10)
     kmeans.fit(embeddings)
 
@@ -79,19 +132,10 @@ def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, pro
     
     return cluster_info
 
-def summarize_text(sentences, pageIndex, filepath, method='kmeans', proportion=0.05, model_service=None):
+def summarize_text(sentences, pageIndex, embeddings, filepath, method='kmeans', proportion=0.05):
     """Summarizes text using dynamic K-Means clustering."""
-    start_pdf = time.time()
-    
-    # Get sentence embeddings
-    start_embed = time.time()
-    embeddings = get_sentence_embeddings(sentences, pageIndex, model_service)
-    embed_time = time.time() - start_embed
-    sent_per_second = len(sentences) / embed_time
-
-    print(f"Embedding: {embed_time:.2f}s ({sent_per_second:.2f} sent/s)")
-
     start_summary = time.time()
+    
     if method == "kmeans":
         cluster_info = auto_kmeans_sentence_selection(sentences, embeddings, pageIndex, filepath, proportion)
         summary_time = time.time() - start_summary
@@ -102,46 +146,40 @@ def summarize_text(sentences, pageIndex, filepath, method='kmeans', proportion=0
     print("--------------------------------")
     print(f"Summarization: {summary_time:.2f}s ({sent_per_second_summary:.2f} sent/s)")
     
-    # Remove direct print of cluster_info and ensure it's properly formatted
     if not isinstance(cluster_info, dict):
         raise ValueError("cluster_info must be a dictionary")
         
     return cluster_info
 
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser(description='Summarize a PDF file using K-means clustering.')
-#     parser.add_argument('pdf_file', help='Path to the PDF file to summarize')
-#     args = parser.parse_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Summarize a PDF file using K-means clustering.')
+    start_total = time.time()
+    pdf_file = '/Users/peterliu/Documents/Repos/fathom/test/fan.pdf'
+    
+    # Process PDF in streaming fashion
+    sentences, pageIndex, embeddings = process_streaming_pdf(pdf_file)
+    
+    input_sentence_count = len(sentences)
+    print("--------------------------------")
+    print(f"PDF extraction and embedding complete")
+    print(f"Processed {input_sentence_count} sentences")
+    print("--------------------------------")
 
-#     start_total = time.time()
+    # Run clustering on the accumulated results
+    cluster_info = summarize_text(sentences, pageIndex, embeddings, pdf_file, method='kmeans', proportion=0.05)
 
-#     start_pdf = time.time()
-#     pdf_data = extract_text_from_pdf(args.pdf_file)
-#     sentences = pdf_data['sentences']
-#     pageIndex = pdf_data['pageIndex']
-#     pdf_time = time.time() - start_pdf
-#     chars_per_second_pdf = len(pdf_data['text']) / pdf_time
-#     print("--------------------------------")
-#     print(f"PDF extraction")
-#     print(f"{pdf_time:.2f} seconds, {len(pdf_data['text'])} characters ({chars_per_second_pdf/1000:.2f}k char/s)")
-#     print("--------------------------------")
+    output_sentence_count = len(cluster_info['sentences'])
+    compression_ratio = output_sentence_count / input_sentence_count
 
-#     input_word_count = len(pdf_data['text'].split())
+    print(f"K-Means Summary: {cluster_info['count']} clusters from {input_sentence_count} sentences")
+    print(f"Input: {input_sentence_count} | Output: {output_sentence_count} | (Compression: {compression_ratio:.2%})")
 
-#     cluster_info = summarize_text(sentences, pageIndex, args.pdf_file, method='kmeans', proportion=0.05)
+    total_time = time.time() - start_total
+    sentences_per_second = len(sentences) / total_time
+    print("--------------------------------")
+    print(f"Total: {total_time:.2f}s ({len(sentences)/1000:.0f}k sentences ({sentences_per_second/1000:.2f}k sent/s)")
+    print("--------------------------------")
 
-#     output_word_count = sum(len(sentence.split()) for sentence in cluster_info['sentences'])
-#     compression_ratio = output_word_count / input_word_count
-
-#     print(f"K-Means Summary: {cluster_info['count']} clusters from {len(sent_tokenize(pdf_data['text']))} sentences")
-#     print(f"Input: {input_word_count} | Output: {output_word_count} | (Compression: {compression_ratio:.2%})")
-
-#     total_time = time.time() - start_total
-#     chars_per_second = len(pdf_data['text']) / total_time
-#     print("--------------------------------")
-#     print(f"Total: {total_time:.2f}s ({len(pdf_data['text'])/1000:.0f}k chars ({chars_per_second/1000:.2f}k char/s)")
-#     print("--------------------------------")
-
-#     output_path = os.path.join(os.path.dirname(args.pdf_file), 'kMeans.json')
-#     with open(output_path, 'w', encoding='utf-8') as f:
-#         json.dump(cluster_info, f, indent=4, ensure_ascii=False) 
+    # Save to clusters file from constants
+    with open(CLUSTERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cluster_info, f, indent=4, ensure_ascii=False) 

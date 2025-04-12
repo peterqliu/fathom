@@ -6,13 +6,16 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import time
 from dotenv import load_dotenv
+import json
+from constants import MODELS_DIR, CONFIG_FILE
+import numpy as np
 
 # Initialize Flask app
 app = Flask(__name__)
 
 # Define model cache directory
-model_name = 'BAAI/bge-large-en'
-cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_cache")
+model_name = 'BAAI/bge-small-en'
+cache_dir = MODELS_DIR
 
 # Download and cache model if not already cached
 print(f"Checking for model in cache directory: {cache_dir}")
@@ -56,22 +59,33 @@ def encode():
     data = request.json
     query = data['query']
     embedding = model.encode([query], convert_to_numpy=True)
+    # Ensure embedding is 1D before converting to list
+    embedding = np.squeeze(embedding)
     return jsonify({'embedding': embedding.tolist()})
 
 if __name__ == "__main__":
     # Load environment variables right before we need them
     load_dotenv(override=True)  # Add override=True to force reload
-    file_directory = os.getenv('FILE_DIRECTORY')
+    
+    # Get file directory from config
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            file_directory = config.get('targetDirectory')
+            if not file_directory:
+                raise ValueError("targetDirectory not found in config file")
+            file_directory = os.path.expanduser(file_directory)  # Expand ~ to home directory
+    except FileNotFoundError:
+        raise ValueError(f"Config file not found at {CONFIG_FILE}")
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
     
     # Set up file system observer
-    if file_directory:
-        event_handler = FileChangeHandler()
-        observer = Observer()
-        observer.schedule(event_handler, file_directory, recursive=False)
-        observer.start()
-        print(f"Started watching directory: {file_directory}")
-    else:
-        print("FILE_DIRECTORY environment variable not set")
+    event_handler = FileChangeHandler()
+    observer = Observer()
+    observer.schedule(event_handler, file_directory, recursive=False)
+    observer.start()
+    print(f"Started watching directory: {file_directory}")
 
     # Start the server
     serve(app, host='localhost', port=5000, threads=1)
@@ -80,6 +94,5 @@ if __name__ == "__main__":
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        if file_directory:
-            observer.stop()
-            observer.join() 
+        observer.stop()
+        observer.join() 

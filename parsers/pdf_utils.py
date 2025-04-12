@@ -93,6 +93,41 @@ def combine_short_sentences(sentences, min_length=20):
     
     return result
 
+def stream_text_from_pdf(filepath):
+    """
+    Stream text from a PDF file, yielding one sentence and its page index at a time.
+    
+    Args:
+        filepath (str): Path to the PDF file
+        
+    Yields:
+        tuple: (sentence, page_index) for each sentence in the PDF
+    """
+    try:
+        reader = PdfReader(filepath)
+        currentFragment = ""
+        
+        for i, page in enumerate(reader.pages):
+            pageSentences = extract_text_from_pdf_page(reader, i)
+            
+            # Prepend any existing fragment to the first sentence of current page
+            if currentFragment and len(currentFragment) > 0 and pageSentences:
+                pageSentences[0] = currentFragment + " " + pageSentences[0]
+                pageSentences = pageSentences[1:]  # Remove first element after combining
+                currentFragment = ""
+            
+            # Handle potential sentence fragments
+            if pageSentences and len(pageSentences) > 0:
+                currentFragment = pageSentences[-1]
+                pageSentences = pageSentences[:-1]
+            
+            # Combine short sentences and yield each one with its page index
+            pageSentences = combine_short_sentences(pageSentences)
+            for sentence in pageSentences:
+                yield sentence, i
+    
+    except Exception as e:
+        raise Exception(f"Error reading PDF file: {str(e)}")
 
 # print(extract_text_from_pdf('mindsight.pdf'))
 # print(extract_text_from_pdf_page('mindsight.pdf', 20))
