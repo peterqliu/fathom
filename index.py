@@ -16,7 +16,7 @@ import os
 # )
 import sys
 from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
-from utils import get_index_dir
+from utils import get_index_dir, get_target_directory
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -214,80 +214,7 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
     else:
         print("No valid embeddings were generated.")
 
-def remove_file_embeddings(filename):
-    """
-    Remove embeddings for a specific file from the FAISS index and metadata.
-    
-    Args:
-        filename (str): Name of the file to remove (will be matched against relative paths)
-    """
-    # Get index directory directly (don't use environment variable)
-    index_dir = get_index_dir()
-    print(f"Using index directory: {index_dir}")  # Debug print
-        
-    try:
-        # Load existing metadata
-        with open(os.path.join(index_dir, 'clusters.json'), 'r', encoding='utf-8') as f:
-            all_clusters = json.load(f)
-        
-        # Find the file and its ID range in metadata
-        file_index = None
-        for i, file_info in enumerate(all_clusters['files']):
-            if filename in file_info['path']:
-                file_index = i
-                break
-        
-        if file_index is None:
-            print(f"File {filename} not found in metadata")
-            return
-        
-        # Get the ID range to remove
-        file_info = all_clusters['files'][file_index]
-        ids_to_remove = np.arange(file_info['id_start'], file_info['id_end'], dtype=np.int64)
-        
-        # Load the FAISS index
-        vector_index = faiss.read_index(os.path.join(index_dir, 'vectorIndex'))
-        
-        # Remove vectors by their IDs
-        vector_index.remove_ids(ids_to_remove)
-        
-        # Update metadata
-        all_clusters['files'].pop(file_index)
-        
-        # Save updated index and metadata
-        faiss.write_index(vector_index, os.path.join(index_dir, 'vectorIndex'))
-        with open(os.path.join(index_dir, 'clusters.json'), 'w') as f:
-            json.dump(all_clusters, f, indent=4, ensure_ascii=False)
-        
-        print(f"Successfully removed embeddings for {filename}")
-        
-    except Exception as e:
-        print(f"Error removing embeddings: {str(e)}")
-
-def get_target_directory():
-    """
-    Read and return the target directory from the config file.
-    
-    Returns:
-        str: The target directory path
-        
-    Raises:
-        ValueError: If config file is missing, invalid, or missing targetDirectory
-    """
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            directory = config.get('targetDirectory')
-            if not directory:
-                raise ValueError("targetDirectory not found in config file")
-            return os.path.expanduser(directory)  # Expand ~ to home directory
-    except FileNotFoundError:
-        raise ValueError(f"Config file not found at {CONFIG_FILE}")
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
-
 if __name__ == "__main__":
-
     directory = get_target_directory()
     print("Indexing directory: ", directory)
     index_directory(directory, 0.05) 

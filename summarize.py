@@ -26,7 +26,7 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
     Args:
         sentences (list): List of sentences to embed
         indices (list): List of indices for the sentences
-        model_service: Optional ModelService instance for embeddings (ignored, using HTTP endpoint)
+        model_service: Optional ModelService instance for embeddings
     """
     if not sentences or not isinstance(sentences, list):
         raise ValueError(f"Invalid sentences input. Got type: {type(sentences)}")
@@ -35,13 +35,8 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
     
     try:
         print("Attempting to encode sentences...")
-        # Get embeddings for each sentence individually
-        embeddings = []
-        for sentence in sentences:
-            embedding = get_embedding(sentence)
-            embeddings.append(embedding)
-            
-        embeddings = np.array(embeddings)
+        # Get embeddings for all sentences at once
+        embeddings = get_embeddings_batch(sentences)
         print(f"Embeddings shape: {embeddings.shape if hasattr(embeddings, 'shape') else 'unknown'}")
         
         if embeddings is None or (hasattr(embeddings, 'size') and embeddings.size == 0):

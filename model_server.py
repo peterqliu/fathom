@@ -35,26 +35,6 @@ model = SentenceTransformer(os.path.join(cache_dir, model_name.split('/')[-1]))
 model.encode(["warmup"] * 32, convert_to_numpy=True)
 print("Model loaded and ready!")
 
-# File system event handler
-class FileChangeHandler(FileSystemEventHandler):
-    def on_created(self, event):
-        if not event.is_directory:
-            print(f"File created: {event.src_path}")
-            print('--------------------------------')
-
-    def on_deleted(self, event):
-        if not event.is_directory:
-            print(f"File deleted: {event.src_path}")
-            print('--------------------------------')
-            
-    def on_moved(self, event):
-        print('event', event)
-        if not event.is_directory:
-            print(f"File renamed/moved:")
-            print(f"  from: {event.src_path}")
-            print(f"  to: {event.dest_path}")
-            print('--------------------------------')
-
 @app.route('/encode', methods=['POST'])
 def encode():
     data = request.json

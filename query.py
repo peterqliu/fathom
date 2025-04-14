@@ -29,7 +29,7 @@ def search_index(query, top_k=5, model_service=None):
     Args:
         query: Query string or embedding
         top_k: Number of results to return
-        model_service: Optional ModelService instance. If None, uses localhost HTTP endpoint
+        model_service: Optional ModelService instance. If None, uses global ModelService instance
     """
     print(f"Searching index for query: {query}")
     # Load the FAISS index
@@ -54,13 +54,13 @@ def search_index(query, top_k=5, model_service=None):
     except Exception as e:
         raise RuntimeError(f"Failed to load clusters data: {str(e)}")
 
-    # Get query embedding either from model service or local server
+    # Get query embedding
     try:
         if model_service is not None:
             query_embedding = model_service.encode(query)
         else:
-            # Use our utility function with the retrieval prefix
-            query_embedding = get_embedding('Represent this sentence for retrieval: ' + query)
+            # Use our utility function
+            query_embedding = get_embedding(query)
     except Exception as e:
         raise RuntimeError(f"Failed to get query embedding: {str(e)}")
     

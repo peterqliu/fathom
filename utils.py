@@ -2,20 +2,14 @@ import requests
 import numpy as np
 import os
 import sys
+import json
+from constants import CONFIG_FILE, INDEX_DIR
 
 def get_index_dir():
     """Get the appropriate index directory path"""
-    if getattr(sys, 'frozen', False):
-        # We are running in a bundle
-        app_support = os.path.expanduser('~/Library/Application Support/Fathom')
-        index_dir = os.path.join(app_support, 'index')
-    else:
-        # We are running in development
-        index_dir = os.path.abspath('index')
-    
     # Create directory if it doesn't exist
-    os.makedirs(index_dir, exist_ok=True)
-    return index_dir
+    os.makedirs(INDEX_DIR, exist_ok=True)
+    return INDEX_DIR
 
 def get_embedding(sentence: str, model_url: str = 'http://localhost:5000/encode') -> np.ndarray:
     """
@@ -57,4 +51,26 @@ def get_embeddings_batch(sentences: list[str], model_url: str = 'http://localhos
         raise ValueError(f"Failed to get embeddings: {response.text}")
     
     embeddings = np.array(response.json()['embeddings'])
-    return embeddings 
+    return embeddings
+
+def get_target_directory():
+    """
+    Read and return the target directory from the config file.
+    
+    Returns:
+        str: The target directory path
+        
+    Raises:
+        ValueError: If config file is missing, invalid, or missing targetDirectory
+    """
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            directory = config.get('targetDirectory')
+            if not directory:
+                raise ValueError("targetDirectory not found in config file")
+            return os.path.expanduser(directory)  # Expand ~ to home directory
+    except FileNotFoundError:
+        raise ValueError(f"Config file not found at {CONFIG_FILE}")
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}") 
