@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 import json
 from constants import MODELS_DIR, CONFIG_FILE
 import numpy as np
-
+from watch import remove_file_embeddings
+from watch import FileChangeHandler
 # Initialize Flask app
 app = Flask(__name__)
 

@@ -62,11 +62,11 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
             'path': relative_path,
             'sentences': sentences_dict[file_path],
             'indices': page_indices_dict[file_path],
-            'id_start': int(current_id),
-            'id_end': int(current_id + num_embeddings)
+            # 'id_start': int(current_id),
+            # 'id_end': int(current_id + num_embeddings)
         })
         
-        current_id += num_embeddings
+        # current_id += num_embeddings
     
     # Combine all embeddings and IDs
     all_embeddings = np.vstack([np.array(e) for e in embeddings_list])
@@ -80,19 +80,95 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
     
     return vector_index, all_clusters
 
-# Recursively indexes all supported files in a directory
+def process_file_for_indexing(file_path, directory_path, vector_index, all_clusters, current_id):
+    """
+    Process a single file and update the FAISS index and clusters.
+    
+    Args:
+        file_path: Full path to the file to process
+        directory_path: Base directory path for creating relative paths
+        vector_index: Existing FAISS index or None if new
+        all_clusters: Existing clusters metadata
+        current_id: Current ID counter for embeddings
+        
+    Returns:
+        tuple: (updated_vector_index, updated_clusters, new_current_id, success)
+               where success is a boolean indicating if processing was successful
+    """
+    try:
+        print(f"Processing: {file_path}")
+        
+        # Extract text based on file format
+        file_extension = os.path.splitext(file_path)[1].lower()
+        try:
+            print(f"Processing file: {file_path} with extension: {file_extension}")
+            
+            if file_extension == '.pdf':
+                cluster_info = summarize_text(file_path)
+            else:
+                print(f"Unsupported file format: {file_extension}")
+                return vector_index, all_clusters, current_id, False
+                
+            if not cluster_info:
+                print(f"No text extracted from {file_path}")
+                return vector_index, all_clusters, current_id, False
+                
+        except Exception as e:
+            print(f"Error processing {file_path}: {str(e)}")
+            print(f"Error type: {type(e).__name__}")
+            return vector_index, all_clusters, current_id, False
+        
+        # Get embeddings for this document
+        if cluster_info and 'embeddings' in cluster_info:
+            embeddings = np.array(cluster_info['embeddings'])
+            if len(embeddings.shape) == 1:
+                embeddings = embeddings.reshape(1, -1)
+            
+            # Initialize or update FAISS index
+            if vector_index is None:
+                dimension = embeddings.shape[1]
+                base_index = faiss.IndexFlatL2(dimension)
+                vector_index = faiss.IndexIDMap(base_index)
+            
+            # Add embeddings to index with IDs
+            num_embeddings = len(embeddings)
+            file_ids = np.arange(current_id, current_id + num_embeddings, dtype=np.int64)
+            vector_index.add_with_ids(embeddings.astype(np.float32), file_ids)
+            
+            # Update clusters metadata
+            relative_path = os.path.relpath(file_path, directory_path)
+            all_clusters['files'].append({
+                'path': relative_path,
+                'sentences': cluster_info['sentences'],
+                'indices': cluster_info['indices'],
+                # 'id_start': int(current_id),
+                # 'id_end': int(current_id + num_embeddings)
+            })
+            
+            current_id += num_embeddings
+            print(f"Successfully processed {file_path}")
+            return vector_index, all_clusters, current_id, True
+            
+        else:
+            print(f"No valid embeddings generated for {file_path}")
+            return vector_index, all_clusters, current_id, False
+        
+    except Exception as e:
+        print(f"Error processing {file_path}: {str(e)}")
+        return vector_index, all_clusters, current_id, False
+
 def index_directory(directory_path, proportion=0.05, model_service=None):
     """
     Recursively index all supported files (PDF, MOBI, EPUB) in a directory and its subdirectories.
-    Creates a combined FAISS index of all cluster centers.
+    Creates and updates a FAISS index and clusters incrementally as files are processed.
     
     Args:
         directory_path: Path to directory to index
         proportion: Proportion of sentences to use for clustering (default: 0.05)
         model_service: Optional ModelService instance for embeddings
     """
-    print(f"Using index directory: {INDEX_DIR}")  # Debug print
-    print(f"Indexing directory: {directory_path}")  # Debug print
+    print(f"Using index directory: {INDEX_DIR}")
+    print(f"Indexing directory: {directory_path}")
     
     if not os.path.exists(directory_path):
         print(f"Directory does not exist: {directory_path}")
@@ -102,117 +178,75 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
         print(f"Path is not a directory: {directory_path}")
         return
     
+    # Initialize or load existing index and clusters
+    try:
+        if os.path.exists(VECTOR_INDEX_FILE):
+            print("Loading existing FAISS index...")
+            vector_index = faiss.read_index(VECTOR_INDEX_FILE)
+            with open(CLUSTERS_FILE, 'r') as f:
+                all_clusters = json.load(f)
+            current_id = max([file_info['id_end'] for file_info in all_clusters['files']]) if all_clusters['files'] else 0
+        else:
+            print("Creating new FAISS index...")
+            # Initialize with dummy dimension, will be updated with first file
+            vector_index = None
+            all_clusters = {'files': []}
+            current_id = 0
+    except Exception as e:
+        print(f"Error loading existing index: {str(e)}")
+        print("Creating new index...")
+        vector_index = None
+        all_clusters = {'files': []}
+        current_id = 0
+    
     # Collect all supported files recursively
     supported_files = []
     for root, _, files in os.walk(directory_path):
         for file in files:
             if file.lower().endswith(('.pdf', '.epub', '.txt', '.doc', '.docx', '.rtf')):
-                # Use os.path.join and then os.path.normpath to handle spaces correctly
                 file_path = os.path.normpath(os.path.join(root, file))
+                # Skip if file is already indexed
+                if any(file_info['path'] == os.path.relpath(file_path, directory_path) for file_info in all_clusters['files']):
+                    print(f"Skipping already indexed file: {file_path}")
+                    continue
                 supported_files.append(file_path)
     
     if not supported_files:
-        print("No supported files found in the directory.")
+        print("No new files to index.")
         return
 
-    print(f"Found {len(supported_files)} supported files")
-
-    # Initialize dictionaries to store results
-    sentences_dict = {}
-    page_indices_dict = {}
-    embeddings_list = []
-    file_paths = []
+    print(f"Found {len(supported_files)} new files to index")
     start_time = time.time()
+    processed_count = 0
     
     for supported_file in supported_files:
-        try:
-            print(f"Processing: {supported_file}")
-            
-            # Extract text based on file format
-            file_extension = os.path.splitext(supported_file)[1].lower()
-            try:
-                print(f"Processing file: {supported_file} with extension: {file_extension}")  # Debug line
-                
-                if file_extension == '.pdf':
-                    cluster_info = summarize_text(supported_file)
-                # elif file_extension == '.epub':
-                #     sentences, pageIndex = extract_text_from_epub(supported_file)
-                # elif file_extension == '.txt':
-                #     sentences, pageIndex = extract_text_from_txt(supported_file)
-                # elif file_extension == '.docx':
-                #     sentences, pageIndex = extract_text_from_docx(supported_file)
-                # elif file_extension == '.rtf':
-                #     sentences, pageIndex = extract_text_from_rtf(supported_file)
-                # elif file_extension == '.doc':
-                #     sentences, pageIndex = extract_text_from_doc(supported_file)
-                # elif file_extension == '.mobi':
-                #     print(f"Warning: MOBI files need conversion to EPUB first. Skipping {supported_file}")
-                #     continue
-                else:
-                    print(f"Unsupported file format: {file_extension}")
-                    continue
-                    
-                if not cluster_info:
-                    print(f"No text extracted from {supported_file}")
-                    continue
-                    
-            except Exception as e:
-                print(f"Error processing {supported_file}: {str(e)}")
-                print(f"Error type: {type(e).__name__}")  # Debug line
-                continue
-            
-            # Store results with the full file path as the key
-            sentences_dict[supported_file] = cluster_info.get('sentences', [])
-            page_indices_dict[supported_file] = cluster_info.get('indices', [])
-            file_paths.append(supported_file)
-            
-            # Get clusters for this document
-            if cluster_info and 'embeddings' in cluster_info:
-                embeddings_list.append(cluster_info['embeddings'])
-                print(f"Successfully generated embeddings for {supported_file}")
-            else:
-                print(f"No valid embeddings generated for {supported_file}")
-                continue
-            
-        except Exception as e:
-            print(f"Error processing {supported_file}: {str(e)}")
-            continue
-
-    if embeddings_list:
-        try:
-            print("Creating FAISS index...")
-            # Create FAISS index with ID mapping
-            vector_index, all_clusters = create_faiss_index_with_ids(
-                embeddings_list, 
-                sentences_dict,
-                page_indices_dict,
-                file_paths,
-                directory_path
-            )
-            
-            print(f"Saving index to {VECTOR_INDEX_FILE}")
+        # Process the file and update index and clusters
+        vector_index, all_clusters, current_id, success = process_file_for_indexing(
+            supported_file, directory_path, vector_index, all_clusters, current_id
+        )
+        
+        if success:
+            # Save index and clusters after each successful file processing
+            print(f"Saving index and clusters after processing {supported_file}")
             faiss.write_index(vector_index, VECTOR_INDEX_FILE)
-            
-            print(f"Saving clusters to {CLUSTERS_FILE}")
             with open(CLUSTERS_FILE, 'w') as f:
                 json.dump(all_clusters, f, indent=2)
-            
-            print(f"\nProcessed {len(supported_files)} supported files")
-            total_time = time.time() - start_time
-            print("--------------------------------")
-            print(f"Total indexing time: {total_time:.2f} seconds")
-            print("--------------------------------")
-            
-            # Calculate and log size metrics in one line
-            dir_size = get_directory_size(directory_path)
-            index_size = os.path.getsize(VECTOR_INDEX_FILE)
-            print(blue(f"Sizes: Directory={format_size(dir_size)}, Index={format_size(index_size)} ({(index_size/dir_size)*100:.2f}% of original)"))
-            print("--------------------------------")
-        except Exception as e:
-            print(f"Error saving index files: {str(e)}")
-            raise
+            processed_count += 1
+    
+    if processed_count > 0:
+        total_time = time.time() - start_time
+        print("--------------------------------")
+        print(f"Total indexing time: {total_time:.2f} seconds")
+        print(f"Processed {processed_count} new files")
+        print("--------------------------------")
+        
+        # Calculate and log size metrics
+        dir_size = get_directory_size(directory_path)
+        index_size = os.path.getsize(VECTOR_INDEX_FILE)
+        print(blue(f"Sizes: Directory={format_size(dir_size)}, Index={format_size(index_size)} ({(index_size/dir_size)*100:.2f}% of original)"))
+        print("--------------------------------")
     else:
-        print("No valid embeddings were generated.")
+        print("No new files were successfully indexed.")
 
 if __name__ == "__main__":
     directory = get_target_directory()

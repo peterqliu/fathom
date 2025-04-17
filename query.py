@@ -178,7 +178,6 @@ if __name__ == "__main__":
                         help='Number of results to return (default: 5)')
     
     args = parser.parse_args()
-    print(INDEX_DIR)
     try:
         results = search_index(args.query, args.top_k)
 
