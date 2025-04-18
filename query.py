@@ -1,25 +1,16 @@
 import faiss
-import json
 import numpy as np
 import argparse
 import requests
-# from parsers.text_utils import (
-#     extract_text_from_txt,
-#     extract_text_from_docx,
-#     extract_text_from_rtf,
-#     extract_text_from_doc
-# )
+import sqlite3
 from parsers.pdf_utils import extract_text_from_pdf_page
-# from parsers.ebook_utils import extract_text_from_epub
 from PyPDF2 import PdfReader
-# from dotenv import load_dotenv
 import os
 import sys
-from constants import APP_SUPPORT_PATH, INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
+from constants import APP_SUPPORT_PATH, INDEX_DIR, VECTOR_INDEX_FILE, SQLITE_DB_FILE
 from index import get_target_directory
 from utils import get_embedding
-
-
+from sqlite_utils import get_sentence_by_id
 
 def search_index(query, top_k=5, model_service=None):
     """
@@ -33,26 +24,26 @@ def search_index(query, top_k=5, model_service=None):
     """
     print(f"Searching index for query: {query}")
     # Load the FAISS index
-    vector_index_path = os.path.join(INDEX_DIR, 'vectorIndex')
-    clusters_path = os.path.join(INDEX_DIR, 'clusters.json')
+    vector_index_path = VECTOR_INDEX_FILE
+    db_path = SQLITE_DB_FILE
     
     print(f"Looking for vector index at: {vector_index_path}")
-    print(f"Looking for clusters at: {clusters_path}")
+    print(f"Looking for database at: {db_path}")
     print(f"INDEX_DIR exists: {os.path.exists(INDEX_DIR)}")
     print(f"Vector index exists: {os.path.exists(vector_index_path)}")
-    print(f"Clusters file exists: {os.path.exists(clusters_path)}")
+    print(f"Database exists: {os.path.exists(db_path)}")
     
     try:
         vector_index = faiss.read_index(vector_index_path)
     except Exception as e:
         raise RuntimeError(f"Failed to load vector index: {str(e)}")
 
-    # Load the clusters metadata
+    # Connect to SQLite database
     try:
-        with open(clusters_path, 'r', encoding='utf-8') as f:
-            clusters_data = json.load(f)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
     except Exception as e:
-        raise RuntimeError(f"Failed to load clusters data: {str(e)}")
+        raise RuntimeError(f"Failed to connect to database: {str(e)}")
 
     # Get query embedding
     try:
@@ -73,39 +64,22 @@ def search_index(query, top_k=5, model_service=None):
     
     # Collect results
     results = []
-    current_idx = 0
     
     try:
-        for file_data in clusters_data['files']:
-            num_clusters = len(file_data['sentences'])
-            print(f"Processing file: {file_data['path']} with {num_clusters} sentences")
-            
-            # Find indices that fall within this file's range
-            file_indices = indices[0][(indices[0] >= current_idx) & (indices[0] < current_idx + num_clusters)]
-            print(f"Found {len(file_indices)} matches in this file")
-            
-            if len(file_indices) > 0:
-                for idx in file_indices:
-                    relative_idx = idx - current_idx
-                    print(f"Processing index {idx} (relative: {relative_idx})")
-                    if relative_idx < 0 or relative_idx >= num_clusters:
-                        print(f"Warning: Skipping invalid relative index {relative_idx} for file {file_data['path']}")
-                        continue
-                        
-                    results.append({
-                        'file': file_data['path'],
-                        'sentence': file_data['sentences'][relative_idx],
-                        'indices': file_data['indices'][relative_idx],
-                        'distance': float(distances[0][np.where(indices[0] == idx)[0][0]])
-                    })
-            
-            current_idx += num_clusters
+        for idx, distance in zip(indices[0], distances[0]):
+            sentence_data = get_sentence_by_id(cursor, int(idx))
+            if sentence_data:
+                results.append({
+                    'file': sentence_data['path'],
+                    'sentence': sentence_data['sentence'],
+                    'indices': sentence_data['id'],
+                    'distance': float(distance)
+                })
     except Exception as e:
         print(f"Error processing results: {str(e)}")
-        print(f"Current index: {current_idx}")
-        print(f"File data: {file_data}")
-        print(f"Indices: {indices}")
         raise
+    finally:
+        conn.close()
     
     # Sort results by distance
     results.sort(key=lambda x: x['distance'])

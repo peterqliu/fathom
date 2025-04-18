@@ -15,8 +15,9 @@ import os
 #     extract_text_from_doc
 # )
 import sys
-from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE
+from constants import INDEX_DIR, VECTOR_INDEX_FILE, CLUSTERS_FILE, CONFIG_FILE, SQLITE_DB_FILE
 from utils import get_index_dir, get_target_directory
+from sqlite_utils import init_sqlite_db, insert_sentences
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -130,22 +131,22 @@ def process_file_for_indexing(file_path, directory_path, vector_index, all_clust
                 base_index = faiss.IndexFlatL2(dimension)
                 vector_index = faiss.IndexIDMap(base_index)
             
-            # Add embeddings to index with IDs
-            num_embeddings = len(embeddings)
-            file_ids = np.arange(current_id, current_id + num_embeddings, dtype=np.int64)
+            # Insert sentences into SQLite database and get row IDs
+            relative_path = os.path.relpath(file_path, directory_path)
+            row_ids = insert_sentences(relative_path, cluster_info['sentences'], cluster_info['indices'])
+            print(f"Inserted sentences with row IDs: {row_ids}")
+            
+            # Use SQLite row IDs for the vector index
+            file_ids = np.array(row_ids, dtype=np.int64)
             vector_index.add_with_ids(embeddings.astype(np.float32), file_ids)
             
-            # Update clusters metadata
-            relative_path = os.path.relpath(file_path, directory_path)
+            # Update clusters metadata (keeping for backward compatibility)
             all_clusters['files'].append({
                 'path': relative_path,
                 'sentences': cluster_info['sentences'],
                 'indices': cluster_info['indices'],
-                # 'id_start': int(current_id),
-                # 'id_end': int(current_id + num_embeddings)
             })
             
-            current_id += num_embeddings
             print(f"Successfully processed {file_path}")
             return vector_index, all_clusters, current_id, True
             
@@ -169,6 +170,9 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
     """
     print(f"Using index directory: {INDEX_DIR}")
     print(f"Indexing directory: {directory_path}")
+    
+    # Initialize SQLite database
+    init_sqlite_db()
     
     if not os.path.exists(directory_path):
         print(f"Directory does not exist: {directory_path}")

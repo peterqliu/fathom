@@ -18,6 +18,7 @@ STORE_FILE = os.path.join(APP_SUPPORT_PATH, 'content_store.json')
 os.makedirs(INDEX_DIR, exist_ok=True)  # Create index directory before defining files in it
 VECTOR_INDEX_FILE = os.path.join(INDEX_DIR, 'vectorIndex')
 CLUSTERS_FILE = os.path.join(INDEX_DIR, 'clusters.json')
+SQLITE_DB_FILE = os.path.join(INDEX_DIR, 'sentences.db')
 
 # NLTK data initialization
 def ensure_nltk_data():
