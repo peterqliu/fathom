@@ -8,7 +8,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from index import process_file_for_indexing
 from constants import VECTOR_INDEX_FILE, SQLITE_DB_FILE, CONFIG_FILE
-from sqlite_utils import init_sqlite_db
+from sqlite_utils import init_sqlite_db, init_filenames_table
 
 def update_file_path(old_path, new_path):
     """
@@ -169,8 +169,17 @@ def remove_file_embeddings(filepath):
         raise
 
 def watch_directory(directory):
-    # Initialize SQLite database
-    init_sqlite_db()
+    # Initialize SQLite database tables
+    init_sqlite_db(
+        table_name='sentences',
+        columns=[
+            'rowid INTEGER PRIMARY KEY',
+            'path TEXT',
+            'sentence TEXT',
+            'id INTEGER'
+        ]
+    )
+    init_filenames_table()
     
     event_handler = FileHandler()
     observer = Observer()

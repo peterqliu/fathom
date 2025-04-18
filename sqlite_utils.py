@@ -2,35 +2,58 @@ import sqlite3
 import os
 from constants import INDEX_DIR
 
-def init_sqlite_db():
-    """Initialize the SQLite database for storing sentences."""
+def init_sqlite_db(table_name='sentences', columns=None):
+    """Initialize the SQLite database with a table of specified name and columns.
+    
+    Args:
+        table_name (str): Name of the table to create/check
+        columns (list): List of column definitions in SQL format, e.g. 
+            ['id INTEGER PRIMARY KEY', 'path TEXT', 'sentence TEXT']
+    """
+    if columns is None:
+        # Default columns for sentences table
+        columns = [
+            'rowid INTEGER PRIMARY KEY',
+            'path TEXT',
+            'sentence TEXT',
+            'id INTEGER'
+        ]
+    
     db_path = os.path.join(INDEX_DIR, 'sentences.db')
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
     # Check if table exists and has the correct schema
-    cursor.execute("PRAGMA table_info(sentences)")
-    columns = cursor.fetchall()
-    column_names = [col[1] for col in columns]
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    existing_columns = cursor.fetchall()
     
-    # If table doesn't exist or is missing id column, recreate it
-    if not columns or 'id' not in column_names:
+    # If table doesn't exist or schema doesn't match, recreate it
+    if not existing_columns or len(existing_columns) != len(columns):
         # Drop existing table if it exists
-        cursor.execute('DROP TABLE IF EXISTS sentences')
+        cursor.execute(f'DROP TABLE IF EXISTS {table_name}')
         
         # Create table with new schema
-        cursor.execute('''
-        CREATE TABLE sentences (
-            rowid INTEGER PRIMARY KEY,
-            path TEXT,
-            sentence TEXT,
-            id INTEGER
+        create_table_sql = f'''
+        CREATE TABLE {table_name} (
+            {', '.join(columns)}
         )
-        ''')
-        print("Created new sentences table with id column")
+        '''
+        cursor.execute(create_table_sql)
+        print(f"Created new {table_name} table with columns: {', '.join(columns)}")
     
     conn.commit()
     conn.close()
+
+def init_filenames_table():
+    """Initialize the filenames table to track file metadata."""
+    init_sqlite_db(
+        table_name='filenames',
+        columns=[
+            'id INTEGER PRIMARY KEY',
+            'path TEXT',
+            'lastUpdated INTEGER'
+        ]
+    )
 
 def get_next_available_id(cursor):
     """Find the next available rowid by checking for NULL paths or next auto-increment."""

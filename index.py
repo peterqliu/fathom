@@ -9,7 +9,7 @@ import os
 import sys
 from constants import INDEX_DIR, VECTOR_INDEX_FILE, SQLITE_DB_FILE
 from utils import get_index_dir, get_target_directory
-from sqlite_utils import init_sqlite_db, insert_sentences
+from sqlite_utils import init_sqlite_db, insert_sentences, init_filenames_table
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -91,8 +91,17 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
     print(f"Using index directory: {INDEX_DIR}")
     print(f"Indexing directory: {directory_path}")
     
-    # Initialize SQLite database
-    init_sqlite_db()
+    # Initialize SQLite database tables
+    init_sqlite_db(
+        table_name='sentences',
+        columns=[
+            'rowid INTEGER PRIMARY KEY',
+            'path TEXT',
+            'sentence TEXT',
+            'id INTEGER'
+        ]
+    )
+    init_filenames_table()
     
     if not os.path.exists(directory_path):
         print(f"Directory does not exist: {directory_path}")
