@@ -58,9 +58,9 @@ def create_faiss_index_with_ids(embeddings_list, sentences_dict, page_indices_di
         
         # Store file information with ID range
         relative_path = os.path.relpath(file_path, directory_path)
-        print(page_indices_dict[file_path])
+        # print('AAAA', file_path)
         all_clusters['files'].append({
-            'path': relative_path,
+            'path': file_path,
             'sentences': sentences_dict[file_path],
             'indices': page_indices_dict[file_path],
             # 'id_start': int(current_id),
@@ -102,7 +102,6 @@ def process_file_for_indexing(file_path, directory_path, vector_index, all_clust
         # Extract text based on file format
         file_extension = os.path.splitext(file_path)[1].lower()
         try:
-            print(f"Processing file: {file_path} with extension: {file_extension}")
             
             if file_extension == '.pdf':
                 cluster_info = summarize_text(file_path)
@@ -133,7 +132,7 @@ def process_file_for_indexing(file_path, directory_path, vector_index, all_clust
             
             # Insert sentences into SQLite database and get row IDs
             relative_path = os.path.relpath(file_path, directory_path)
-            row_ids = insert_sentences(relative_path, cluster_info['sentences'], cluster_info['indices'])
+            row_ids = insert_sentences(file_path, cluster_info['sentences'], cluster_info['indices'])
             print(f"Inserted sentences with row IDs: {row_ids}")
             
             # Use SQLite row IDs for the vector index

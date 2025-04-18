@@ -2,7 +2,8 @@ import os
 import json
 import numpy as np
 import faiss
-from constants import VECTOR_INDEX_FILE, CLUSTERS_FILE
+import sqlite3
+from constants import VECTOR_INDEX_FILE, CLUSTERS_FILE, SQLITE_DB_FILE
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from index import get_target_directory
@@ -52,46 +53,47 @@ def start_watching(directory):
 
 def remove_file_embeddings(filename):
     """
-    Remove embeddings for a specific file from the FAISS index and metadata.
+    Remove embeddings for a specific file from the FAISS index and SQLite database.
     
     Args:
         filename (str): Name of the file to remove (will be matched against relative paths)
     """
     try:
-        # Load existing metadata
-        with open(CLUSTERS_FILE, 'r', encoding='utf-8') as f:
-            all_clusters = json.load(f)
-        
-        # Find the file and its ID range in metadata
-        file_index = None
-        for i, file_info in enumerate(all_clusters['files']):
-            full_path = os.path.join(get_target_directory(), file_info['path'])
-            if filename in full_path:
-                file_index = i
-                break
-        
-        if file_index is None:
-            print(f"File {filename} not found in metadata")
-            return
-        
-        # Get the ID range to remove
-        file_info = all_clusters['files'][file_index]
-        ids_to_remove = np.arange(file_info['id_start'], file_info['id_end'], dtype=np.int64)
         # Load the FAISS index
         vector_index = faiss.read_index(VECTOR_INDEX_FILE)
+        
+        # Connect to SQLite database
+        conn = sqlite3.connect(SQLITE_DB_FILE)
+        cursor = conn.cursor()
+        
+        # Find all rows with matching path and get their ids
+        cursor.execute('SELECT id FROM sentences WHERE path LIKE ?', (f'%{filename}%',))
+        rows = cursor.fetchall()
+        
+        if not rows:
+            print(f"File {filename} not found in database")
+            return
+            
+        # Get the IDs to remove from vector index
+        ids_to_remove = np.array([row[0] for row in rows], dtype=np.int64)
+        
         # Remove vectors by their IDs
         vector_index.remove_ids(ids_to_remove)
-        # Update metadata
-        all_clusters['files'].pop(file_index)
-        # Save updated index and metadata
+        
+        # Update metadata in SQLite - set path and sentence to NULL for matching rows
+        cursor.execute('UPDATE sentences SET path = NULL, sentence = NULL WHERE path LIKE ?', (f'%{filename}%',))
+        
+        # Save changes
+        conn.commit()
+        conn.close()
         faiss.write_index(vector_index, VECTOR_INDEX_FILE)
-        with open(CLUSTERS_FILE, 'w') as f:
-            json.dump(all_clusters, f, indent=4, ensure_ascii=False)
         
         print(f"Successfully removed embeddings for {filename}")
         
     except Exception as e:
         print(f"Error removing embeddings: {str(e)}")
+        if 'conn' in locals():
+            conn.close()
 
 if __name__ == "__main__":
     # Get the target directory to watch
