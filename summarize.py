@@ -11,7 +11,6 @@ import argparse
 import faiss
 from parsers.pdf_utils import stream_text_from_pdf
 from utils import get_embedding, get_embeddings_batch
-from constants import CLUSTERS_FILE
 
 # Ensure NLTK data is downloaded
 try:
@@ -182,14 +181,11 @@ def summarize_text(filepath, method='kmeans', proportion=0.05):
 
     return cluster_info
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    pdf_file = '/Users/peterliu/Documents/Repos/fathom/test/fan.pdf'
+#     pdf_file = '/Users/peterliu/Documents/Repos/fathom/test/fan.pdf'
 
-    # Run clustering on the accumulated results
-    cluster_info = summarize_text(pdf_file, method='kmeans', proportion=0.05)
+#     # Run clustering on the accumulated results
+#     cluster_info = summarize_text(pdf_file, method='kmeans', proportion=0.05)
 
 
-    # Save to clusters file from constants
-    with open(CLUSTERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(cluster_info, f, indent=4, ensure_ascii=False) 

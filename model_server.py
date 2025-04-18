@@ -10,7 +10,7 @@ import json
 from constants import MODELS_DIR, CONFIG_FILE
 import numpy as np
 from watch import remove_file_embeddings
-from watch import FileChangeHandler
+from watch import FileHandler
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -59,25 +59,12 @@ if __name__ == "__main__":
     # Load environment variables right before we need them
     load_dotenv(override=True)  # Add override=True to force reload
     
-    # Get file directory from config
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            file_directory = config.get('targetDirectory')
-            if not file_directory:
-                raise ValueError("targetDirectory not found in config file")
-            file_directory = os.path.expanduser(file_directory)  # Expand ~ to home directory
-    except FileNotFoundError:
-        raise ValueError(f"Config file not found at {CONFIG_FILE}")
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
-    
     # Set up file system observer
-    event_handler = FileChangeHandler()
+    event_handler = FileHandler()
     observer = Observer()
-    observer.schedule(event_handler, file_directory, recursive=False)
+    observer.schedule(event_handler, event_handler.directory, recursive=False)
     observer.start()
-    print(f"Started watching directory: {file_directory}")
+    print(f"Started watching directory: {event_handler.directory}")
 
     # Start the server
     serve(app, host='localhost', port=5000, threads=1)
