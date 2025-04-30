@@ -8,8 +8,14 @@ import time
 import os
 import sys
 from constants import INDEX_DIR, VECTOR_INDEX_FILE, SQLITE_DB_FILE
-from utils import get_index_dir, get_target_directory
-from sqlite_utils import init_sqlite_db, insert_sentences, init_filenames_table
+from utilities import get_index_dir, get_target_directory
+from utils.model_wrapper import ModelServiceWrapper
+from sqlite_utils import init_sqlite_db, insert_sentences, init_filenames_table,  get_sentence_by_id
+from parsers.pdf_utils import extract_text_from_pdf_page
+from PyPDF2 import PdfReader
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"

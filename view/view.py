@@ -8,8 +8,7 @@ import threading
 import os
 import json
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
+# Set up logger
 logger = logging.getLogger(__name__)
 
 # Import index_directory function only when needed to avoid circular imports
@@ -195,19 +194,10 @@ class SearchBar(ttk.Frame):
                             raise RuntimeError("Model service failed to initialize")
                     logger.debug("Model service is ready")
                     
-                    # Create wrapper for properly shaped embeddings
-                    class ModelServiceWrapper:
-                        def __init__(self, model_service):
-                            self.model_service = model_service
-                        def encode(self, text):
-                            embeddings = self.model_service.encode(text)
-                            # If single string input, reshape to 2D
-                            if isinstance(text, str):
-                                return embeddings.reshape(1, -1)
-                            return embeddings  # Already 2D for list input
-                    
-                    # Pass model service wrapper to index_directory
+                    # Use the shared wrapper class
+                    from utils.model_wrapper import ModelServiceWrapper
                     wrapped_model_service = ModelServiceWrapper(self.model_service)
+                    
                     logger.debug("Starting directory indexing...")
                     index_directory(self.target_directory, model_service=wrapped_model_service)
                     logger.debug("Directory indexing completed")
@@ -450,25 +440,17 @@ class FathomView:
             logger.debug(f"Processing search query: {query} in directory: {target_directory}")
             self.results_display.show_processing()
             
-            # Create wrapper for properly shaped embeddings
-            class ModelServiceWrapper:
-                def __init__(self, model_service):
-                    self.model_service = model_service
-                def encode(self, text):
-                    logger.debug("Encoding search query...")
-                    embedding = self.model_service.encode(text)
-                    logger.debug(f"Query encoded, shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
-                    return embedding.reshape(1, -1)
-            
+            # Use the shared wrapper class
+            from utils.model_wrapper import ModelServiceWrapper
             wrapped_model_service = ModelServiceWrapper(self.model_service)
+            
             logger.debug("Searching index...")
             results = search_index(query, top_k=5, model_service=wrapped_model_service)
             logger.debug(f"Search complete, found {len(results) if results else 0} results")
+            logger.debug(f"Results before display: {results}")
             
             if results:
-                logger.debug("Displaying results...")
                 self.results_display.show_results(query, results)
-                logger.debug("Results displayed")
             else:
                 logger.debug("No results found")
                 self.results_display.show_error("No results found")

@@ -9,7 +9,7 @@ import os
 import sys
 from constants import APP_SUPPORT_PATH, INDEX_DIR, VECTOR_INDEX_FILE, SQLITE_DB_FILE
 from index import get_target_directory
-from utils import get_embedding
+from utilities import get_embedding
 from sqlite_utils import get_sentence_by_id
 
 def search_index(query, top_k=5, model_service=None):
@@ -49,41 +49,70 @@ def search_index(query, top_k=5, model_service=None):
     try:
         if model_service is not None:
             query_embedding = model_service.encode(query)
+            print(f"Query embedding shape: {query_embedding.shape}")
+            print(f"Query embedding dtype: {query_embedding.dtype}")
+            print(f"Query embedding first few values: {query_embedding[0][:5]}")
         else:
             # Use our utility function
             query_embedding = get_embedding(query)
     except Exception as e:
         raise RuntimeError(f"Failed to get query embedding: {str(e)}")
     
-    # Search the index
+    # Search the index with a larger k to get more candidates
+    search_k = top_k * 2  # Search for more results than we need
     try:
-        distances, indices = vector_index.search(query_embedding.astype(np.float32), top_k)
+        distances, indices = vector_index.search(query_embedding.astype(np.float32), search_k)
         print(f"Search returned {len(indices[0])} results")
+        print(f"Indices shape: {indices.shape}")
+        print(f"Distances shape: {distances.shape}")
+        print(f"Indices: {indices[0]}")
+        print(f"Distances: {distances[0]}")
     except Exception as e:
         raise RuntimeError(f"Failed to search index: {str(e)}")
     
-    # Collect results
+    # Collect results with deduplication
     results = []
+    seen_sentences = set()  # Track seen sentences to avoid duplicates
+    min_distance_diff = 0.01  # Minimum distance difference to consider results unique
     
     try:
+        last_distance = None
         for idx, distance in zip(indices[0], distances[0]):
             sentence_data = get_sentence_by_id(cursor, int(idx))
-            if sentence_data:
-                results.append({
-                    'file': sentence_data['path'],
-                    'sentence': sentence_data['sentence'],
-                    'indices': sentence_data['id'],
-                    'distance': float(distance)
-                })
+            if not sentence_data:
+                continue
+                
+            # Skip if we've seen this exact sentence before
+            if sentence_data['sentence'] in seen_sentences:
+                print(f"Skipping duplicate sentence: {sentence_data['sentence'][:50]}...")
+                continue
+                
+            # Skip if the distance is too close to the last result
+            if last_distance is not None and abs(distance - last_distance) < min_distance_diff:
+                print(f"Skipping similar distance result: {distance} vs {last_distance}")
+                continue
+                
+            seen_sentences.add(sentence_data['sentence'])
+            last_distance = distance
+            
+            results.append({
+                'file': sentence_data['path'],
+                'sentence': sentence_data['sentence'],
+                'indices': sentence_data['id'],
+                'distance': float(distance)
+            })
+            print(f"Added result: {sentence_data['sentence'][:50]}...")
+            
+            if len(results) >= top_k:
+                break
+                
     except Exception as e:
         print(f"Error processing results: {str(e)}")
         raise
     finally:
         conn.close()
     
-    # Sort results by distance
-    results.sort(key=lambda x: x['distance'])
-    return results[:top_k]
+    return results
 
 def extract_page_from_file(filepath, indices):
     """

@@ -4,13 +4,13 @@ import os
 import numpy as np
 from threading import Thread, Event
 import sys
-from flask import Flask, request, jsonify
-from waitress import serve
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import json
 from dotenv import load_dotenv
-from constants import CONFIG_FILE
+from constants import CONFIG_FILE, MODELS_DIR
+from watch import remove_file_embeddings
+from watch import FileHandler
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,10 @@ class FileChangeHandler(FileSystemEventHandler):
             self.logger.info('--------------------------------')
 
 class ModelService:
-    def __init__(self, models_dir: str, store_file: str):
-        self.store_file = store_file
+    def __init__(self, models_dir: str = MODELS_DIR):
         self.models_dir = models_dir
-        
         self.model = None
         self.ready = Event()
-        self.app = Flask(__name__)
         
         # Define model cache directory
         self.model_name = 'BAAI/bge-small-en'
@@ -51,40 +48,28 @@ class ModelService:
         self.init_thread = Thread(target=self.initialize_model)
         self.init_thread.start()
 
-        # Set up Flask routes
-        self.setup_routes()
+        # Set up file system observer
+        self.setup_file_watcher()
     
-    def setup_routes(self):
-        @self.app.route('/encode', methods=['POST'])
-        def encode():
-            if not self.ready.is_set():
-                return jsonify({'error': 'Model not yet initialized'}), 503
-            
-            try:
-                data = request.json
-                query = data['query']
-                embedding = self.encode(query)
-                return jsonify({'embedding': embedding.tolist()})
-            except Exception as e:
-                logger.error(f"Encoding error: {str(e)}")
-                return jsonify({'error': str(e)}), 400
+    def setup_file_watcher(self):
+        """Set up the file system observer to watch for changes"""
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                file_directory = config.get('targetDirectory')
+                if not file_directory:
+                    raise ValueError("targetDirectory not found in config file")
+                file_directory = os.path.expanduser(file_directory)  # Expand ~ to home directory
+        except FileNotFoundError:
+            raise ValueError(f"Config file not found at {CONFIG_FILE}")
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
 
-        @self.app.route('/encode_batch', methods=['POST'])
-        def encode_batch():
-            if not self.ready.is_set():
-                return jsonify({'error': 'Model not yet initialized'}), 503
-            
-            try:
-                data = request.json
-                queries = data['queries']
-                if not isinstance(queries, list):
-                    return jsonify({'error': 'queries must be a list'}), 400
-                
-                embeddings = self.encode(queries)
-                return jsonify({'embeddings': embeddings.tolist()})
-            except Exception as e:
-                logger.error(f"Batch encoding error: {str(e)}")
-                return jsonify({'error': str(e)}), 400
+        self.event_handler = FileHandler()
+        self.observer = Observer()
+        self.observer.schedule(self.event_handler, file_directory, recursive=False)
+        self.observer.start()
+        logger.info(f"Started watching directory: {file_directory}")
     
     def initialize_model(self):
         try:
@@ -153,31 +138,9 @@ class ModelService:
         """Wait until the model is ready"""
         return self.ready.wait(timeout=timeout)
 
-    def start_server(self, host='localhost', port=5000):
-        """Start the Flask server"""
-        # Load environment variables
-        load_dotenv(override=True)
-        
-        # Get file directory from config
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                file_directory = config.get('targetDirectory')
-                if not file_directory:
-                    raise ValueError("targetDirectory not found in config file")
-                file_directory = os.path.expanduser(file_directory)  # Expand ~ to home directory
-        except FileNotFoundError:
-            raise ValueError(f"Config file not found at {CONFIG_FILE}")
-        except json.JSONDecodeError:
-            raise ValueError(f"Invalid JSON in config file at {CONFIG_FILE}")
-        
-        # Set up file system observer
-        event_handler = FileChangeHandler(logger)
-        observer = Observer()
-        observer.schedule(event_handler, file_directory, recursive=False)
-        observer.start()
-        logger.info(f"Started watching directory: {file_directory}")
-
-        # Start the server
-        logger.info(f"Starting server on {host}:{port}")
-        serve(self.app, host=host, port=port, threads=1) 
+    def cleanup(self):
+        """Clean up resources when shutting down"""
+        if hasattr(self, 'observer'):
+            self.observer.stop()
+            self.observer.join()
+            logger.info("File watcher stopped") 

@@ -10,7 +10,7 @@ from nltk.tokenize import sent_tokenize
 import argparse
 import faiss
 from parsers.pdf_utils import stream_text_from_pdf
-from utils import get_embedding, get_embeddings_batch
+from utilities import get_embedding, get_embeddings_batch
 
 # Ensure NLTK data is downloaded
 try:
