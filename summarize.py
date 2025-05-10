@@ -1,16 +1,16 @@
 import os
+import sys
 import time
 import numpy as np
 from sklearn.cluster import KMeans
 import networkx as nx
 from sklearn.metrics.pairwise import paired_distances
-import json
 import nltk
-from nltk.tokenize import sent_tokenize
-import argparse
-import faiss
-from parsers.pdf_utils import stream_text_from_pdf
-from utilities import get_embedding, get_embeddings_batch
+from pdf_utils import stream_text_from_pdf
+
+# Add parent directory to path for absolute imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from model import EmbeddingModel
 
 # Ensure NLTK data is downloaded
 try:
@@ -18,14 +18,12 @@ try:
 except LookupError:
     nltk.download('punkt')
 
-def get_sentence_embeddings(sentences, indices, model_service=None):
+def get_sentence_embeddings(sentences):
     """
     Convert sentences into embeddings.
     
     Args:
         sentences (list): List of sentences to embed
-        indices (list): List of indices for the sentences
-        model_service: Optional ModelService instance for embeddings
     """
     if not sentences or not isinstance(sentences, list):
         raise ValueError(f"Invalid sentences input. Got type: {type(sentences)}")
@@ -35,7 +33,12 @@ def get_sentence_embeddings(sentences, indices, model_service=None):
     try:
         print("Attempting to encode sentences...")
         # Get embeddings for all sentences at once
-        embeddings = get_embeddings_batch(sentences)
+        model = EmbeddingModel()  # Will reuse existing instance due to singleton pattern
+        # Wait for model to be ready
+        while not model.is_ready():
+            time.sleep(0.1)
+            
+        embeddings = model.encode_batch(sentences)
         print(f"Embeddings shape: {embeddings.shape if hasattr(embeddings, 'shape') else 'unknown'}")
         
         if embeddings is None or (hasattr(embeddings, 'size') and embeddings.size == 0):
@@ -61,34 +64,44 @@ def process_streaming_pdf(filepath, batch_size=64):
         batch_size (int): Number of sentences to batch together for embedding
         
     Returns:
-        tuple: (sentences, indices, embeddings) - lists of processed data
+        tuple: (sentences, page_indices, sub_indices, embeddings) - lists of processed data
     """
     sentences = []
-    indices = []
+    page_indices = [] # Renamed from indices for clarity
+    sub_indices = []
     embeddings = []
-    current_batch = []
-    current_batch_indices = []
+    current_batch_sentences = []
+    current_batch_page_indices = []
+    current_batch_sub_indices = []
+    
+    # Initialize embedding model - will reuse existing instance due to singleton pattern
+    model = EmbeddingModel()
+    # Wait for model to be ready
+    while not model.is_ready():
+        time.sleep(0.1)
     
     start_time = time.time()
     sentence_count = 0
     
-    print("Starting PDF processing...")
-    for sentence, page_index in stream_text_from_pdf(filepath):
-        current_batch.append(sentence)
-        current_batch_indices.append(page_index)
+    for sentence, page_idx, sub_idx in stream_text_from_pdf(filepath):
+        current_batch_sentences.append(sentence)
+        current_batch_page_indices.append(page_idx)
+        current_batch_sub_indices.append(sub_idx)
         
-        if len(current_batch) >= batch_size:
+        if len(current_batch_sentences) >= batch_size:
             # Process the batch
-            batch_embeddings = get_embeddings_batch(current_batch)
+            batch_embeddings = model.encode_batch(current_batch_sentences)
             
             # Store results
-            sentences.extend(current_batch)
-            indices.extend(current_batch_indices)
-            embeddings.extend(batch_embeddings)
+            sentences.extend(current_batch_sentences)
+            page_indices.extend(current_batch_page_indices)
+            sub_indices.extend(current_batch_sub_indices)
+            embeddings.append(batch_embeddings)  # Store the numpy array directly
             
             # Clear the batch
-            current_batch = []
-            current_batch_indices = []
+            current_batch_sentences = []
+            current_batch_page_indices = []
+            current_batch_sub_indices = []
             
             sentence_count += batch_size
             if sentence_count % 100 == 0:
@@ -97,22 +110,24 @@ def process_streaming_pdf(filepath, batch_size=64):
                 print(f"Processed {sentence_count} sentences ({rate:.2f} sent/s)")
     
     # Process any remaining sentences in the last batch
-    if current_batch:
-        batch_embeddings = get_embeddings_batch(current_batch)
+    if current_batch_sentences:
+        batch_embeddings = model.encode_batch(current_batch_sentences)
         
-        sentences.extend(current_batch)
-        indices.extend(current_batch_indices)
-        embeddings.extend(batch_embeddings)
+        sentences.extend(current_batch_sentences)
+        page_indices.extend(current_batch_page_indices)
+        sub_indices.extend(current_batch_sub_indices)
+        embeddings.append(batch_embeddings)  # Store the numpy array directly
         
-        sentence_count += len(current_batch)
+        sentence_count += len(current_batch_sentences)
     
-    embeddings = np.array(embeddings)
+    # Combine all embeddings into one numpy array
+    embeddings = np.vstack(embeddings) if embeddings else np.array([])
     elapsed = time.time() - start_time
     print(f"Completed processing {sentence_count} sentences in {elapsed:.2f}s ({sentence_count/elapsed:.2f} sent/s)")
     
-    return sentences, indices, embeddings
+    return sentences, page_indices, sub_indices, embeddings
 
-def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, proportion=0.1):
+def auto_kmeans_sentence_selection(sentences, embeddings, page_indices_list, sub_indices_list, filename, proportion=0.1):
     """Dynamically selects number of clusters and finds closest sentences."""
     num_clusters = max(1, round(len(sentences) * proportion))
     print(f"num_clusters: {num_clusters}")
@@ -125,7 +140,8 @@ def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, pro
         'count': num_clusters,
         'file': filename,
         'sentences': [],
-        'indices': [],
+        'indices': [], # This will store page_indices
+        'sub_indices': [], # New list for sub_indices
         'embeddings': []
     }
 
@@ -133,7 +149,8 @@ def auto_kmeans_sentence_selection(sentences, embeddings, indices, filename, pro
         distances = paired_distances(embeddings, [center] * len(embeddings))
         closest_idx = np.argmin(distances)
         cluster_info['sentences'].append(sentences[closest_idx])
-        cluster_info['indices'].append(indices[closest_idx])
+        cluster_info['indices'].append(page_indices_list[closest_idx]) # Storing page_index
+        cluster_info['sub_indices'].append(sub_indices_list[closest_idx]) # Storing sub_index
         cluster_info['embeddings'].append(embeddings[closest_idx].tolist())
     
     return cluster_info
@@ -143,7 +160,7 @@ def summarize_text(filepath, method='kmeans', proportion=0.05):
     start_total = time.time()
 
     # Process PDF in streaming fashion
-    sentences, pageIndex, embeddings = process_streaming_pdf(filepath)
+    sentences, page_indices, sub_indices, embeddings = process_streaming_pdf(filepath)
     input_sentence_count = len(sentences)
 
     print("--------------------------------")
@@ -155,7 +172,7 @@ def summarize_text(filepath, method='kmeans', proportion=0.05):
     start_summary = time.time()
     
     if method == "kmeans":
-        cluster_info = auto_kmeans_sentence_selection(sentences, embeddings, pageIndex, filepath, proportion)
+        cluster_info = auto_kmeans_sentence_selection(sentences, embeddings, page_indices, sub_indices, filepath, proportion)
         summary_time = time.time() - start_summary
     else:
         raise ValueError("Invalid method. Use 'kmeans'")
@@ -187,5 +204,6 @@ def summarize_text(filepath, method='kmeans', proportion=0.05):
 
 #     # Run clustering on the accumulated results
 #     cluster_info = summarize_text(pdf_file, method='kmeans', proportion=0.05)
+#     print(cluster_info)
 
 
