@@ -1,4 +1,3 @@
-import argparse
 import faiss
 import numpy as np
 from summarize import summarize_text
@@ -7,12 +6,9 @@ import json
 import time
 import os
 import sys
-from constants import INDEX_DIR, VECTOR_INDEX_FILE, SQLITE_DB_FILE
-from utilities import get_index_dir, get_target_directory
-from utils.model_wrapper import ModelServiceWrapper
-from sqlite_utils import init_sqlite_db, insert_sentences, init_filenames_table,  get_sentence_by_id
-from parsers.pdf_utils import extract_text_from_pdf_page
-from PyPDF2 import PdfReader
+from constants import INDEX_DIR, Config # VECTOR_INDEX_FILE removed, will be handled by VectorIndex
+from sqlite_utils import init_sqlite_db, get_or_create_file_id, insert_sentences, is_file_already_indexed
+from vectorIndex_utils import VectorIndex # Added import
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,17 +16,16 @@ logger = logging.getLogger(__name__)
 # Set tokenizers parallelism before importing any HuggingFace modules
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-def process_file_for_indexing(file_path, directory_path, vector_index):
+def process_file_for_indexing(file_path, vector_idx: VectorIndex):
     """
-    Process a single file and update the FAISS index.
+    Process a single file and update the FAISS index using VectorIndex.
     
     Args:
         file_path: Full path to the file to process
-        directory_path: Base directory path for creating relative paths
-        vector_index: Existing FAISS index or None if new
+        vector_idx: Instance of the VectorIndex class
         
     Returns:
-        tuple: (updated_vector_index, success) where success is a boolean indicating if processing was successful
+        bool: True if processing was successful, False otherwise
     """
     try:
         print(f"Processing: {file_path}")
@@ -42,59 +37,60 @@ def process_file_for_indexing(file_path, directory_path, vector_index):
                 cluster_info = summarize_text(file_path)
             else:
                 print(f"Unsupported file format: {file_extension}")
-                return vector_index, False
+                return False
                 
             if not cluster_info:
                 print(f"No text extracted from {file_path}")
-                return vector_index, False
+                return False
                 
         except Exception as e:
             print(f"Error processing {file_path}: {str(e)}")
             print(f"Error type: {type(e).__name__}")
-            return vector_index, False
+            return False
         
         # Get embeddings for this document
         if cluster_info and 'embeddings' in cluster_info:
             embeddings = np.array(cluster_info['embeddings'])
-            if len(embeddings.shape) == 1:
-                embeddings = embeddings.reshape(1, -1)
+
             
-            # Initialize or update FAISS index
-            if vector_index is None:
-                dimension = embeddings.shape[1]
-                base_index = faiss.IndexFlatL2(dimension)
-                vector_index = faiss.IndexIDMap(base_index)
+            # Prepare page_and_sub_indices for insert_sentences
+            page_indices = cluster_info['indices']
+            sub_indices = cluster_info['sub_indices']
+            page_and_sub_indices = list(zip(page_indices, sub_indices))
             
-            # Insert sentences into SQLite database and get row IDs
-            relative_path = os.path.relpath(file_path, directory_path)
-            row_ids = insert_sentences(file_path, cluster_info['sentences'], cluster_info['indices'])
+            # Get or create file_id for the current file_path
+            file_id = get_or_create_file_id(file_path)
+
+            # Pass file_id to insert_sentences instead of file_path
+            row_ids = insert_sentences(file_id, page_and_sub_indices)
             
             # Use SQLite row IDs for the vector index
-            file_ids = np.array(row_ids, dtype=np.int64)
-            vector_index.add_with_ids(embeddings.astype(np.float32), file_ids)
+            file_ids_np = np.array(row_ids, dtype=np.int64)
+            vector_idx.add_with_ids(embeddings, file_ids_np)
             
-            print(f"Successfully processed {file_path}")
-            return vector_index, True
+            vector_idx.save_index()
+
+            return True
             
         else:
             print(f"No valid embeddings generated for {file_path}")
-            return vector_index, False
+            return False
         
     except Exception as e:
         print(f"Error processing {file_path}: {str(e)}")
-        return vector_index, False
+        return False
 
 def index_directory(directory_path, proportion=0.05, model_service=None):
     """
     Recursively index all supported files (PDF, MOBI, EPUB) in a directory and its subdirectories.
-    Creates and updates a FAISS index incrementally as files are processed.
+    Creates and updates a FAISS index incrementally as files are processed using VectorIndex.
     
     Args:
         directory_path: Path to directory to index
         proportion: Proportion of sentences to use for clustering (default: 0.05)
-        model_service: Optional ModelService instance for embeddings
+        model_service: Optional ModelService instance for embeddings (currently unused)
     """
-    print(f"Using index directory: {INDEX_DIR}")
+    print(f"Using index directory: {INDEX_DIR}") # INDEX_DIR might be different from where vector_idx saves its file
     print(f"Indexing directory: {directory_path}")
     
     # Initialize SQLite database tables
@@ -102,12 +98,20 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
         table_name='sentences',
         columns=[
             'rowid INTEGER PRIMARY KEY',
-            'path TEXT',
-            'sentence TEXT',
-            'id INTEGER'
+            'file_id integer',
+            'id INTEGER',
+            'sub_index INTEGER'
         ]
     )
-    init_filenames_table()
+
+    init_sqlite_db(
+        table_name='filenames',
+        columns=[
+            'file_id INTEGER PRIMARY KEY',
+            'path TEXT',
+            'lastIndexed INTEGER'
+        ]
+    )
     
     if not os.path.exists(directory_path):
         print(f"Directory does not exist: {directory_path}")
@@ -117,63 +121,71 @@ def index_directory(directory_path, proportion=0.05, model_service=None):
         print(f"Path is not a directory: {directory_path}")
         return
     
-    # Initialize or load existing index
-    try:
-        if os.path.exists(VECTOR_INDEX_FILE):
-            print("Loading existing FAISS index...")
-            vector_index = faiss.read_index(VECTOR_INDEX_FILE)
-        else:
-            print("Creating new FAISS index...")
-            vector_index = None
-    except Exception as e:
-        print(f"Error loading existing index: {str(e)}")
-        print("Creating new index...")
-        vector_index = None
+    # Initialize VectorIndex (will load or create the index file as per its logic)
+    vector_idx = VectorIndex() # Uses VECTOR_INDEX_FILE from constants by default
     
     # Collect all supported files recursively
     supported_files = []
+    files_to_process = []
+    skipped_count = 0
+    
     for root, _, files in os.walk(directory_path):
         for file in files:
             if file.lower().endswith(('.pdf', '.epub', '.txt', '.doc', '.docx', '.rtf')):
                 file_path = os.path.normpath(os.path.join(root, file))
                 supported_files.append(file_path)
+                
+                # Check if file is already indexed and up-to-date
+                if is_file_already_indexed(file_path):
+                    skipped_count += 1
+                else:
+                    files_to_process.append(file_path)
     
     if not supported_files:
-        print("No new files to index.")
+        print("No files found to index.")
+        return
+        
+    if not files_to_process:
+        print(f"Found {len(supported_files)} files, all are already up-to-date.")
         return
 
-    print(f"Found {len(supported_files)} new files to index")
+    print(f"Found {len(supported_files)} files: {len(files_to_process)} need processing, {skipped_count} are up-to-date")
     start_time = time.time()
     processed_count = 0
     
-    for supported_file in supported_files:
+    for file_path in files_to_process:
         # Process the file and update index
-        vector_index, success = process_file_for_indexing(
-            supported_file, directory_path, vector_index
+        success = process_file_for_indexing(
+            file_path, vector_idx
         )
         
         if success:
             # Save index after each successful file processing
-            print(f"Saving index after processing {supported_file}")
-            faiss.write_index(vector_index, VECTOR_INDEX_FILE)
+            print(f"Saving index after processing {file_path}")
             processed_count += 1
     
     if processed_count > 0:
         total_time = time.time() - start_time
         print("--------------------------------")
         print(f"Total indexing time: {total_time:.2f} seconds")
-        print(f"Processed {processed_count} new files")
+        print(f"Processed {processed_count} new files, skipped {skipped_count} up-to-date files")
         print("--------------------------------")
         
         # Calculate and log size metrics
         dir_size = get_directory_size(directory_path)
-        index_size = os.path.getsize(VECTOR_INDEX_FILE)
-        print(blue(f"Sizes: Directory={format_size(dir_size)}, Index={format_size(index_size)} ({(index_size/dir_size)*100:.2f}% of original)"))
+        # Ensure index file path used by VectorIndex is used for size calculation
+        index_file_path_used = vector_idx.index_file_path 
+        if os.path.exists(index_file_path_used):
+            index_size = os.path.getsize(index_file_path_used)
+            percentage_of_original = (index_size / dir_size * 100) if dir_size > 0 else 0.00
+            print(blue(f"Sizes: Directory={format_size(dir_size)}, Index={format_size(index_size)} ({percentage_of_original:.2f}% of original)"))
+        else:
+            print(blue(f"Sizes: Directory={format_size(dir_size)}, Index file not found at {index_file_path_used}"))
         print("--------------------------------")
     else:
         print("No new files were successfully indexed.")
 
 if __name__ == "__main__":
-    directory = get_target_directory()
+    directory = Config.getTargetDirectory()
     print("Indexing directory: ", directory)
     index_directory(directory, 0.05) 

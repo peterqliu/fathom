@@ -1,4 +1,5 @@
 import os
+import datetime
 
 def get_directory_size(path):
     """Calculate total size of directory in bytes"""
@@ -20,4 +21,25 @@ def format_size(size_in_bytes):
 
 def blue(text):
     """Return text in bright blue ANSI color"""
-    return f"\033[94m{text}\033[0m" 
+    return f"\033[94m{text}\033[0m"
+
+def red(text):
+    """Return text in bright red ANSI color"""
+    return f"\033[91m{text}\033[0m"
+
+def green(text):
+    """Return text in bright green ANSI color"""
+    return f"\033[92m{text}\033[0m"
+
+def get_last_modified_time(file_path):
+    """Get the last modified time of a file as a timestamp"""
+    if os.path.exists(file_path):
+        return os.path.getmtime(file_path)
+    return None
+
+def format_timestamp(timestamp):
+    """Convert timestamp to human readable date/time format"""
+    if timestamp:
+        dt = datetime.datetime.fromtimestamp(timestamp)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return "N/A" 
